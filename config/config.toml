@@ -106,6 +106,7 @@ mouse_capture = true
 # ─────────────────────────────────────────────
 # エージェントをローカル split / 新規 worktree workspace に送り出す。
 # プラグイン本体: https://github.com/s-hiraoku/herdr-toolkit (plugins/dispatch)
+agent_panel_sort = "priority"
 [[keys.command]]
 key = "prefix+d"
 type = "plugin_action"
@@ -123,3 +124,20 @@ key = "prefix+C"
 type = "plugin_action"
 command = "s-hiraoku.dispatch.dispatch-clean"
 description = "dispatch: 使い捨てworktreeの残骸を掃除(変更ありは保護)"
+
+# ─────────────────────────────────────────────
+# サイドバー表示 (herdr 0.7.4 で行レイアウトが変わり見にくくなった対策)
+# ─────────────────────────────────────────────
+# 0.7.4 から展開サイドバーが packed(行間0)になった。旧仕様の行間に戻す
+[ui.sidebar.agents]
+row_gap = 1
+
+[ui.sidebar.spaces]
+row_gap = 1
+
+# 2行目(エージェント/モデル名・ブランチ等)が subtext/overlay 系の薄い色で
+# 描画されて読めないため、catppuccin の該当トークンを明るめに上書き
+[theme.custom]
+subtext0 = "#bac2de"
+overlay0 = "#9399b2"
+overlay1 = "#a6adc8"
