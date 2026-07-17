@@ -19,3 +19,4 @@ command = ["bash", "dispatch.sh", "--worktree"]
 id = "dispatch-local"
 title = "Dispatch agent in a local split"
 command = ["bash", "dispatch.sh", "--local"]
+

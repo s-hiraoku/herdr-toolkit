@@ -42,7 +42,17 @@ while [ $# -gt 0 ]; do
   shift
 done
 
-CWD="${HERDR_ACTIVE_PANE_CWD:-$PWD}"
+# ---- 実行対象ディレクトリの解決 ----
+# 優先順: HERDR_ACTIVE_PANE_CWD (custom command 経由)
+#       → HERDR_PLUGIN_CONTEXT_JSON の focused_pane_cwd (plugin action 経由・実測)
+#       → $PWD (CLI 直接実行)
+# ※ plugin action の $PWD はプラグイン root になるため、そのまま使うと
+#   プラグイン自身の repo に worktree が生えてしまう(実際に起きた事故)
+CWD="${HERDR_ACTIVE_PANE_CWD:-}"
+if [ -z "$CWD" ] && [ -n "${HERDR_PLUGIN_CONTEXT_JSON:-}" ]; then
+  CWD="$(printf '%s' "$HERDR_PLUGIN_CONTEXT_JSON" | jq -r '.focused_pane_cwd // .workspace_cwd // empty' 2>/dev/null || true)"
+fi
+[ -z "$CWD" ] && CWD="$PWD"
 
 if ! [[ "$COUNT" =~ ^[0-9]+$ ]] || [ "$COUNT" -lt 1 ] || [ "$COUNT" -gt 8 ]; then
   echo "エラー: -n は 1〜8 で指定してください" >&2
@@ -130,9 +140,13 @@ for i in $(seq 1 "$COUNT"); do
   fi
 
   if [ "$MODE" = "worktree" ]; then
+    # 単発 dispatch は新しい workspace にフォーカスを移す(押しても何も見えない問題の回避)。
+    # 並列時は元の場所に留まる。
+    FOCUS_OPT="--no-focus"
+    [ "$COUNT" -eq 1 ] && FOCUS_OPT="--focus"
     # herdr が worktree checkout + workspace 作成 + 親workspaceへのグループ化まで行う。
     # --json でも JSON 以外の行が混ざるので '^{' の行だけを抽出する(実測)
-    WT_JSON="$(herdr worktree create --cwd "$CWD" --branch "$BRANCH" --label "$NAME" --no-focus --json | grep -m1 '^{')"
+    WT_JSON="$(herdr worktree create --cwd "$CWD" --branch "$BRANCH" --label "$NAME" "$FOCUS_OPT" --json | grep -m1 '^{')"
     WS_ID="$(printf '%s' "$WT_JSON" | jq -r '.result.workspace.workspace_id // empty')"
     WT_PATH="$(printf '%s' "$WT_JSON" | jq -r '.result.worktree.path // empty')"
     if [ -z "$WS_ID" ] || [ -z "$WT_PATH" ]; then
