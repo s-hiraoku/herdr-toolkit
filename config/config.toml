@@ -1,0 +1,118 @@
+# herdr config.toml
+#
+# 以前使っていたマルチプレクサのキーバインドを Herdr 向けに移植したもの。
+# ⚠️ マークの箇所は Herdr の仕様に合わせて代替しているため、実機で操作感を確認する。
+#
+# 検証方法:
+#   1. brew install herdr
+#   2. herdr 起動 → prefix + ? で全キーバインド一覧を確認
+#   3. 設定リロードは prefix + r
+
+# ─────────────────────────────────────────────
+# キーバインド
+# ─────────────────────────────────────────────
+[keys]
+# prefix は従来の操作感に合わせて Ctrl+A にする (Herdr デフォルトは ctrl+b)
+prefix = "ctrl+a"
+help = "prefix+?"
+settings = "prefix+comma"
+
+# 設定リロード
+reload_config = "prefix+r"
+
+# ペイン分割 (現在のパス引き継ぎは Herdr 側の new_cwd/follow に任せる)
+# Herdr: split_vertical = 左右分割 / split_horizontal = 上下分割
+# `|` は terminal/keyboard protocol によって `shift+backslash` として届くため両方を許可する。
+split_vertical = ["prefix+|", "prefix+shift+backslash", "prefix+v"]
+split_horizontal = "prefix+minus"
+
+# 新規タブ
+new_tab = "prefix+c"
+
+# ペイン移動(Vim 風)
+focus_pane_left = "prefix+h"
+focus_pane_down = "prefix+j"
+focus_pane_up = "prefix+k"
+focus_pane_right = "prefix+l"
+
+# ペインズームイン/アウト
+zoom = "prefix+z"
+
+# ウィンドウ(タブ)移動
+# ⚠️ Herdr にリピート相当の
+#    設定はドキュメント上見当たらない。単発移動になる想定。
+previous_tab = "prefix+p"
+next_tab = "prefix+n"
+
+# 番号指定でタブへジャンプ (prefix+1 〜 prefix+9)
+switch_tab = "prefix+1..9"
+
+# ペインリサイズ
+# ⚠️ Herdr は resize_mode に入ってから hjkl で連続調整する方式。
+resize_mode = "prefix+shift+r"
+
+# コピーモード / detach
+copy_mode = "prefix+["
+detach = "prefix+q"
+
+# ─────────────────────────────────────────────
+# カスタムコマンド
+# ─────────────────────────────────────────────
+
+# Herdr の Workspace を fzf で選んで切り替える。`workspace list` は JSON を返すので
+# jq で "id\t番号: ラベル" に整形し、fzf で選んで workspace_id で focus する。
+# (検証済み: workspace のサブコマンドは list/focus。switch は存在しない)
+[[keys.command]]
+key = "prefix+s"
+type = "pane"
+command = '''herdr workspace focus "$(herdr workspace list | jq -r '.result.workspaces[] | "\(.workspace_id)\t\(.number): \(.label)"' | fzf --delimiter='\t' --with-nth=2.. | cut -f1)"'''
+description = "fzf でワークスペース切替"
+
+# 現在パスのベース名で新規ワークスペース作成。
+# Herdr は `workspace create --cwd ... --label ...`(--new は無い。検証済み)。
+# HERDR_ACTIVE_PANE_CWD はカスタムコマンドに渡される環境変数。
+[[keys.command]]
+key = "prefix+S"
+type = "shell"
+command = '''herdr workspace create --focus --cwd "$HERDR_ACTIVE_PANE_CWD" --label "$(basename "$HERDR_ACTIVE_PANE_CWD")"'''
+description = "現在パス名で新規ワークスペース"
+
+# ─────────────────────────────────────────────
+# テーマ
+# ─────────────────────────────────────────────
+[theme]
+name = "catppuccin"
+
+# ─────────────────────────────────────────────
+# UI / マウス
+# ─────────────────────────────────────────────
+[ui]
+mouse_capture = true
+
+# ─────────────────────────────────────────────
+# 未マッピング / 要確認メモ
+# ─────────────────────────────────────────────
+# - copy-mode の vi バインド (`v` で選択開始 / `y` で pbcopy):
+#   Herdr にも copy_mode はあるが、モード内 v/y の pbcopy 連携が従来と同じにできるか要検証。
+#   herdr はマウス選択でのコピーがネイティブなので、まずはそちらで運用してみるのも手。
+# - `unbind C-z`(suspend 無効化): herdr はそもそも suspend-client 相当が無い想定。実害があれば対応。
+# - image.nvim の kitty graphics protocol:
+#   Herdr のパススルー扱いに依存するので、Herdr 越しに動くかは別途 nvim で要確認。
+# - タブ / ペインの採番仕様: Herdr の表示で確認。
+
+# ─────────────────────────────────────────────
+# dispatch プラグイン (herdr-toolkit)
+# ─────────────────────────────────────────────
+# エージェントをローカル split / 新規 worktree workspace に送り出す。
+# プラグイン本体: https://github.com/s-hiraoku/herdr-toolkit (plugins/dispatch)
+[[keys.command]]
+key = "prefix+d"
+type = "plugin_action"
+command = "s-hiraoku.dispatch.dispatch"
+description = "dispatch: local/worktree を選んでエージェント起動"
+
+[[keys.command]]
+key = "prefix+D"
+type = "plugin_action"
+command = "s-hiraoku.dispatch.dispatch-worktree"
+description = "dispatch: 新規 worktree でエージェント起動"
