@@ -141,3 +141,11 @@ row_gap = 1
 subtext0 = "#bac2de"
 overlay0 = "#9399b2"
 overlay1 = "#a6adc8"
+
+# 今いる dispatch worktree を確認つきで破棄(変更が残っていても y で削除)。
+# 対話確認が必要なため plugin_action ではなく popup(フローティングターミナル)で実行
+[[keys.command]]
+key = "prefix+X"
+type = "popup"
+command = '''bash "$HOME/ghq/github.com/s-hiraoku/herdr-toolkit/plugins/dispatch/dispatch.sh" --discard'''
+description = "dispatch: 今のworktreeを破棄(確認あり)"

@@ -7,6 +7,8 @@
 #   dispatch.sh --worktree "プロンプト"   # 新規 worktree + workspace で起動
 #   dispatch.sh --worktree -n 3 "..."    # worktree 3本で並列起動
 #   dispatch.sh --worktree --no-prompt   # プロンプトなしで claude だけ起動(指示は手で打つ)
+#   dispatch.sh --discard                # 「今いる dispatch worktree」を確認つきで破棄
+#                                        # (popup キーバインドから使う想定。変更ありでも y で削除)
 #   dispatch.sh --clean                  # dispatch/* worktree の残骸を掃除
 #                                        # (変更なし・独自コミットなしのみ削除、それ以外は保護)
 #
@@ -39,6 +41,7 @@ while [ $# -gt 0 ]; do
     -n)            shift; COUNT="${1:-1}" ;;
     --no-prompt)   NO_PROMPT=1 ;;
     --clean)       MODE="clean" ;;
+    --discard)     MODE="discard" ;;
     -h|--help)     grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *)             PROMPT="${PROMPT:+$PROMPT }$1" ;;
   esac
@@ -60,6 +63,56 @@ fi
 if ! [[ "$COUNT" =~ ^[0-9]+$ ]] || [ "$COUNT" -lt 1 ] || [ "$COUNT" -gt 8 ]; then
   echo "エラー: -n は 1〜8 で指定してください" >&2
   exit 1
+fi
+
+# ---- discard モード: 「今いる dispatch worktree」を確認つきで破棄 ----
+# popup キーバインド(type = "popup")から呼ぶ想定。変更が残っていても、
+# 内容を見せた上で y と答えたら workspace・worktree・ブランチごと削除する。
+if [ "$MODE" = "discard" ]; then
+  # 今いる場所が dispatch/* ブランチの worktree かを確認
+  BR="$(git -C "$CWD" branch --show-current 2>/dev/null || true)"
+  WT_ROOT="$(git -C "$CWD" rev-parse --show-toplevel 2>/dev/null || true)"
+  case "$BR" in
+    dispatch/*) ;;
+    *)
+      echo "ここは dispatch worktree ではありません (branch: ${BR:-なし})"
+      echo "誤爆防止のため、dispatch/* ブランチの worktree でのみ使えます。"
+      echo "Enter で閉じる..."; read -r _
+      exit 1
+      ;;
+  esac
+
+  # 中身のサマリを見せる
+  MAIN_GIT_DIR="$(git -C "$WT_ROOT" rev-parse --git-common-dir)"
+  MAIN_ROOT="$(dirname "$MAIN_GIT_DIR")"
+  echo "破棄対象: $WT_ROOT"
+  echo "ブランチ: $BR"
+  dirty_count="$(git -C "$WT_ROOT" status --porcelain | wc -l | tr -d ' ')"
+  unique="$(git -C "$MAIN_ROOT" rev-list --count "$BR" --not --exclude="$BR" --branches --remotes 2>/dev/null || echo '?')"
+  echo "未コミットの変更: ${dirty_count} ファイル / 独自コミット: ${unique} 件"
+  if [ "$dirty_count" != "0" ]; then
+    echo "--- 変更ファイル ---"
+    git -C "$WT_ROOT" status --porcelain | head -10
+  fi
+  echo ""
+  printf "この worktree・ブランチ・workspace を完全に破棄しますか? [y/N] "
+  read -r ans
+  case "$ans" in
+    y|Y|yes) ;;
+    *) echo "中止しました"; exit 0 ;;
+  esac
+
+  # workspace を特定して herdr 経由で削除(タブごと)、残骸は git で始末
+  WS_ID="$(herdr worktree list --cwd "$MAIN_ROOT" --json 2>/dev/null | grep -m1 '^{' \
+    | jq -r --arg p "$WT_ROOT" '.result.worktrees[]? | select(.path == $p) | .open_workspace_id // empty')"
+  if [ -n "$WS_ID" ]; then
+    herdr worktree remove --workspace "$WS_ID" --force >/dev/null 2>&1 || true
+  fi
+  git -C "$MAIN_ROOT" worktree remove --force "$WT_ROOT" >/dev/null 2>&1 || true
+  git -C "$MAIN_ROOT" worktree prune >/dev/null 2>&1 || true
+  git -C "$MAIN_ROOT" branch -D "$BR" >/dev/null 2>&1 || true
+  notify "dispatch: $BR を破棄しました" done
+  exit 0
 fi
 
 # ---- clean モード: dispatch/* worktree の残骸を安全に掃除 ----
