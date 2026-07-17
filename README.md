@@ -41,6 +41,7 @@ dispatch.sh -l "軽い調査して"       # local: 今のリポジトリで spli
 dispatch.sh -w "Issue 123 実装"    # worktree: 新規ブランチ+workspace
 dispatch.sh -w -n 3 "案を3通り"    # worktree 3本で並列
 dispatch.sh -w --no-prompt         # 起動だけして指示は手で打つ
+dispatch.sh --clean                # dispatch/* worktree の残骸を掃除
 ```
 
 - worktree は herdr 本体の規約 (`~/.herdr/worktrees/<repo>/<branch-slug>`) に従い、
@@ -55,8 +56,11 @@ dispatch.sh -w --no-prompt         # 起動だけして指示は手で打つ
 | --- | --- |
 | `prefix+d` | dispatch(local / worktree を選択) |
 | `prefix+D` | worktree に直行 |
+| `prefix+C` | dispatch worktree の残骸を掃除 |
 
 ## 片付け
 
-worktree の削除は herdr の workspace 操作(`herdr worktree remove --workspace <ID>`)か、
-通常の `git worktree remove`。ブランチはマージ/破棄の判断をしてから手で消す。
+`prefix+C`(または `dispatch.sh --clean`)が、現在のリポジトリの `dispatch/*` worktree のうち
+**未コミットの変更も独自コミットも無いもの**だけを worktree・ブランチごと削除する。
+変更や独自コミットが残っているものは保護して一覧表示するので、マージ/破棄の判断をしてから
+手で消す(`herdr worktree remove --workspace <ID>` または `git worktree remove` + `git branch -d`)。

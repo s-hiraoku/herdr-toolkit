@@ -20,3 +20,8 @@ id = "dispatch-local"
 title = "Dispatch agent in a local split"
 command = ["bash", "dispatch.sh", "--local"]
 
+
+[[actions]]
+id = "dispatch-clean"
+title = "Clean up dispatch worktrees (safe: keeps changed ones)"
+command = ["bash", "dispatch.sh", "--clean"]

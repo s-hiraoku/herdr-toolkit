@@ -117,3 +117,9 @@ key = "prefix+D"
 type = "plugin_action"
 command = "s-hiraoku.dispatch.dispatch-worktree"
 description = "dispatch: 新規 worktree でエージェント起動"
+
+[[keys.command]]
+key = "prefix+C"
+type = "plugin_action"
+command = "s-hiraoku.dispatch.dispatch-clean"
+description = "dispatch: 使い捨てworktreeの残骸を掃除(変更ありは保護)"

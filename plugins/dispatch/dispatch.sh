@@ -7,6 +7,8 @@
 #   dispatch.sh --worktree "プロンプト"   # 新規 worktree + workspace で起動
 #   dispatch.sh --worktree -n 3 "..."    # worktree 3本で並列起動
 #   dispatch.sh --worktree --no-prompt   # プロンプトなしで claude だけ起動(指示は手で打つ)
+#   dispatch.sh --clean                  # dispatch/* worktree の残骸を掃除
+#                                        # (変更なし・独自コミットなしのみ削除、それ以外は保護)
 #
 # 環境:
 #   herdr のプラグインアクション/カスタムコマンドから呼ばれる場合は
@@ -36,6 +38,7 @@ while [ $# -gt 0 ]; do
     -w|--worktree) MODE="worktree" ;;
     -n)            shift; COUNT="${1:-1}" ;;
     --no-prompt)   NO_PROMPT=1 ;;
+    --clean)       MODE="clean" ;;
     -h|--help)     grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *)             PROMPT="${PROMPT:+$PROMPT }$1" ;;
   esac
@@ -57,6 +60,54 @@ fi
 if ! [[ "$COUNT" =~ ^[0-9]+$ ]] || [ "$COUNT" -lt 1 ] || [ "$COUNT" -gt 8 ]; then
   echo "エラー: -n は 1〜8 で指定してください" >&2
   exit 1
+fi
+
+# ---- clean モード: dispatch/* worktree の残骸を安全に掃除 ----
+# 「変更なし かつ 独自コミットなし」のものだけ worktree + ブランチを削除する。
+# 変更や独自コミットが残っているものは保護して一覧表示する。
+if [ "$MODE" = "clean" ]; then
+  if ! REPO_ROOT="$(git -C "$CWD" rev-parse --show-toplevel 2>/dev/null)"; then
+    notify "dispatch clean: $CWD は git リポジトリではありません" request
+    echo "エラー: $CWD は git リポジトリではありません" >&2
+    exit 1
+  fi
+  removed=0; kept=0; kept_list=""
+  # herdr 側で workspace が開いているものを対応付ける
+  OPEN_MAP="$(herdr worktree list --cwd "$REPO_ROOT" --json 2>/dev/null | grep -m1 '^{' \
+    | jq -r '.result.worktrees[]? | select(.open_workspace_id != null) | "\(.path)\t\(.open_workspace_id)"' 2>/dev/null || true)"
+
+  # このリポジトリの dispatch/* ブランチを持つ worktree を列挙
+  while IFS=$'\t' read -r WT_PATH WT_BRANCH; do
+    [ -z "$WT_PATH" ] && continue
+    dirty="$(git -C "$WT_PATH" status --porcelain 2>/dev/null | head -1)"
+    # --exclude のパターンは --branches に対しては refs/heads/ を除いた短い名前でマッチする
+    # (refs/heads/ 付きだと除外が効かず、独自コミットが常に 0 になり誤削除する。実測済み)
+    unique="$(git -C "$REPO_ROOT" rev-list --count "$WT_BRANCH" --not --exclude="$WT_BRANCH" --branches --remotes 2>/dev/null || echo 999)"
+    if [ -z "$dirty" ] && [ "$unique" = "0" ]; then
+      # 開いている workspace があれば herdr 経由で(タブごと)削除、なければ git で削除
+      WS_ID="$(printf '%s\n' "$OPEN_MAP" | awk -F'\t' -v p="$WT_PATH" '$1==p {print $2}')"
+      if [ -n "$WS_ID" ]; then
+        herdr worktree remove --workspace "$WS_ID" --force >/dev/null 2>&1 || true
+      fi
+      git -C "$REPO_ROOT" worktree remove --force "$WT_PATH" >/dev/null 2>&1 || true
+      git -C "$REPO_ROOT" worktree prune >/dev/null 2>&1 || true
+      git -C "$REPO_ROOT" branch -D "$WT_BRANCH" >/dev/null 2>&1 || true
+      echo "削除: $WT_BRANCH ($WT_PATH)"
+      removed=$((removed + 1))
+    else
+      reason=""
+      [ -n "$dirty" ] && reason="未コミットの変更あり"
+      [ "$unique" != "0" ] && reason="${reason:+$reason / }独自コミット ${unique} 件"
+      echo "保護: $WT_BRANCH — $reason"
+      kept=$((kept + 1)); kept_list="${kept_list:+$kept_list, }$WT_BRANCH"
+    fi
+  done < <(git -C "$REPO_ROOT" worktree list --porcelain \
+    | awk '/^worktree /{p=$2} /^branch refs\/heads\/dispatch\//{sub("refs/heads/","",$2); print p "\t" $2}')
+
+  echo ""
+  echo "掃除完了: 削除 ${removed} 件 / 保護 ${kept} 件"
+  notify "dispatch clean: 削除 ${removed} / 保護 ${kept}${kept_list:+ ($kept_list)}" done
+  exit 0
 fi
 
 # ---- モード選択(未指定なら対話。非TTYなら明示エラー) ----
