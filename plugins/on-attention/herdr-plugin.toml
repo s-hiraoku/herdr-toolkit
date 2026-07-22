@@ -1,0 +1,18 @@
+id = "s-hiraoku.on-attention"
+name = "on-attention"
+version = "1.0.0"
+min_herdr_version = "0.7.5"
+description = "React to agent status changes: when an agent needs you (blocked), show a popup asking whether to jump to that pane — you decide, no focus stealing."
+platforms = ["linux", "macos"]
+
+# エージェントの status 変化を購読(向こうから反応するイベント駆動プラグイン)
+[[events]]
+on = "pane.agent_status_changed"
+command = ["bash", "on-event.sh"]
+
+# 「ジャンプする?」を尋ねる popup。イベントハンドラから herdr plugin pane open で開く
+[[panes]]
+id = "prompt"
+title = "Agent needs attention"
+command = ["bash", "prompt.sh"]
+placement = "popup"
