@@ -26,6 +26,9 @@
 #     プロセス終了で agent 自体が消える(agent_not_found)
 set -eu
 
+# plugin action は最小 PATH で実行され herdr/jq (Homebrew) が見つからないため補完する
+export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+
 MODE=""
 COUNT=1
 NO_PROMPT=0
@@ -206,6 +209,13 @@ STAMP="$(date +%m%d-%H%M%S)"
 SLUG="$(slugify "$PROMPT")"
 [ -z "$SLUG" ] && SLUG="dispatch"
 
+# herdr 0.7.5 の agent 名は [a-z][a-z0-9_-]{0,31} (先頭は小文字・小文字/数字/-/_ のみ・最大32文字)。
+# ブランチ名は大文字を許容するため SLUG をそのまま使い、agent 名だけ別途正規化する。
+# stamp(11) + 区切り + 並列インデックス分を確保するため slug は小文字化して 18 文字に詰める。
+AGENT_SLUG="$(printf '%s' "$SLUG" | tr 'A-Z' 'a-z' | tr -cs 'a-z0-9' '-' | sed 's/^-*//; s/-*$//' | cut -c1-18 | sed 's/-*$//')"
+case "$AGENT_SLUG" in [a-z]*) ;; *) AGENT_SLUG="d${AGENT_SLUG}" ;; esac
+[ -z "$AGENT_SLUG" ] && AGENT_SLUG="dispatch"
+
 # ---- 完了ウォッチャ(バックグラウンド・ポーリング) ----
 # herdr 0.7.4 は wait agent-status が未実装のため agent get をポーリングする。
 # idle/blocked = エージェントが手を止めた(完了 or 入力待ち) → 通知
@@ -236,10 +246,10 @@ watch_agent() {
 launched=()
 for i in $(seq 1 "$COUNT"); do
   if [ "$COUNT" -gt 1 ]; then
-    NAME="${SLUG}-${STAMP}-${i}"
+    NAME="${AGENT_SLUG}-${STAMP}-${i}"
     BRANCH="dispatch/${STAMP}-${SLUG}-${i}"
   else
-    NAME="${SLUG}-${STAMP}"
+    NAME="${AGENT_SLUG}-${STAMP}"
     BRANCH="dispatch/${STAMP}-${SLUG}"
   fi
 
@@ -252,31 +262,50 @@ for i in $(seq 1 "$COUNT"); do
     # --json でも JSON 以外の行が混ざるので '^{' の行だけを抽出する(実測)
     WT_JSON="$(herdr worktree create --cwd "$CWD" --branch "$BRANCH" --label "$NAME" "$FOCUS_OPT" --json | grep -m1 '^{')"
     WS_ID="$(printf '%s' "$WT_JSON" | jq -r '.result.workspace.workspace_id // empty')"
-    WT_PATH="$(printf '%s' "$WT_JSON" | jq -r '.result.worktree.path // empty')"
-    if [ -z "$WS_ID" ] || [ -z "$WT_PATH" ]; then
+    # 0.7.5 でパスは .result.workspace.worktree.checkout_path に移動(旧 .result.worktree.path も許容)
+    WT_PATH="$(printf '%s' "$WT_JSON" | jq -r '.result.workspace.worktree.checkout_path // .result.worktree.path // empty')"
+    PANE_ID="$(printf '%s' "$WT_JSON" | jq -r '.result.root_pane.pane_id // empty')"
+    if [ -z "$WS_ID" ] || [ -z "$WT_PATH" ] || [ -z "$PANE_ID" ]; then
       notify "dispatch: worktree 作成に失敗しました" request
       echo "エラー: worktree 作成結果を解析できません: $WT_JSON" >&2
       exit 1
     fi
-    if [ -n "$PROMPT" ]; then
-      herdr agent start "$NAME" --workspace "$WS_ID" --cwd "$WT_PATH" --no-focus -- "$AGENT_CMD" "$PROMPT" >/dev/null
-    else
-      herdr agent start "$NAME" --workspace "$WS_ID" --cwd "$WT_PATH" --no-focus -- "$AGENT_CMD" >/dev/null
-    fi
     echo "→ worktree: $WT_PATH (branch $BRANCH, workspace $WS_ID, agent $NAME)"
   else
-    # local: 1本目は split、2本目以降は新タブ(同じ workspace 内)
+    # local: 1本目は現在ペインを右 split、2本目以降は同 workspace の新タブ
     if [ "$i" -eq 1 ]; then
-      SPLIT_OPTS=(--split right)
+      PANE_JSON="$(herdr pane split --current --direction right --no-focus --cwd "$CWD" | grep -m1 '^{')"
+      PANE_ID="$(printf '%s' "$PANE_JSON" | jq -r '.result.pane.pane_id // empty')"
     else
-      SPLIT_OPTS=()
+      TAB_JSON="$(herdr tab create --cwd "$CWD" --label "$NAME" | grep -m1 '^{')"
+      TAB_ID="$(printf '%s' "$TAB_JSON" | jq -r '.result.tab.tab_id // empty')"
+      PANE_ID="$(herdr pane list | grep -m1 '^{' | jq -r --arg t "$TAB_ID" '[.result.panes[] | select(.tab_id == $t)][0].pane_id // empty')"
     fi
-    if [ -n "$PROMPT" ]; then
-      herdr agent start "$NAME" --cwd "$CWD" "${SPLIT_OPTS[@]}" --no-focus -- "$AGENT_CMD" "$PROMPT" >/dev/null
-    else
-      herdr agent start "$NAME" --cwd "$CWD" "${SPLIT_OPTS[@]}" --no-focus -- "$AGENT_CMD" >/dev/null
+    if [ -z "$PANE_ID" ]; then
+      notify "dispatch: ペイン作成に失敗しました" request
+      echo "エラー: 起動先ペインを特定できません" >&2
+      exit 1
     fi
     echo "→ local: $CWD (agent $NAME)"
+  fi
+
+  # 0.7.5 で agent start は「既存ペインに --kind/--pane 指定で起動」する方式に変更された。
+  # 作成直後のペインはシェルが上がりきっておらず agent_pane_busy になるためリトライする。
+  START_ARGS=("$NAME" --kind "$AGENT_CMD" --pane "$PANE_ID")
+  [ -n "$PROMPT" ] && START_ARGS+=(-- "$PROMPT")
+  started=0
+  start_err=""
+  for _try in $(seq 1 30); do
+    if start_err="$(herdr agent start "${START_ARGS[@]}" 2>&1 >/dev/null)"; then
+      started=1
+      break
+    fi
+    sleep 0.5
+  done
+  if [ "$started" -ne 1 ]; then
+    notify "dispatch: $NAME の起動に失敗しました (pane $PANE_ID)" request
+    echo "エラー: agent start が失敗しました: $(printf '%s' "$start_err" | tail -1)" >&2
+    exit 1
   fi
 
   watch_agent "$NAME"

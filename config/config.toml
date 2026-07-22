@@ -73,7 +73,7 @@ description = "fzf でワークスペース切替"
 # Herdr は `workspace create --cwd ... --label ...`(--new は無い。検証済み)。
 # HERDR_ACTIVE_PANE_CWD はカスタムコマンドに渡される環境変数。
 [[keys.command]]
-key = "prefix+S"
+key = "prefix+shift+s"
 type = "shell"
 command = '''herdr workspace create --focus --cwd "$HERDR_ACTIVE_PANE_CWD" --label "$(basename "$HERDR_ACTIVE_PANE_CWD")"'''
 description = "現在パス名で新規ワークスペース"
@@ -114,13 +114,13 @@ command = "s-hiraoku.dispatch.dispatch"
 description = "dispatch: local/worktree を選んでエージェント起動"
 
 [[keys.command]]
-key = "prefix+D"
+key = "prefix+shift+d"
 type = "plugin_action"
 command = "s-hiraoku.dispatch.dispatch-worktree"
 description = "dispatch: 新規 worktree でエージェント起動"
 
 [[keys.command]]
-key = "prefix+C"
+key = "prefix+shift+c"
 type = "plugin_action"
 command = "s-hiraoku.dispatch.dispatch-clean"
 description = "dispatch: 使い捨てworktreeの残骸を掃除(変更ありは保護)"
@@ -145,7 +145,7 @@ overlay1 = "#a6adc8"
 # 今いる dispatch worktree を確認つきで破棄(変更が残っていても y で削除)。
 # 対話確認が必要なため plugin_action ではなく popup(フローティングターミナル)で実行
 [[keys.command]]
-key = "prefix+X"
+key = "prefix+shift+x"
 type = "popup"
 command = '''bash "$HOME/ghq/github.com/s-hiraoku/herdr-toolkit/plugins/dispatch/dispatch.sh" --discard'''
 description = "dispatch: 今のworktreeを破棄(確認あり)"
