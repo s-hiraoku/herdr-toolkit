@@ -243,6 +243,29 @@ cmd_rm() {
   notify "hwt: $br を破棄しました" done
 }
 
+# ---- verb: ls (現 repo の hwt/* worktree を状態付きで一覧) ----
+cmd_ls() {
+  local cwd repo_root; cwd="$(resolve_cwd)"
+  if ! repo_root="$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null)"; then
+    echo "エラー: $cwd は git リポジトリではありません" >&2; return 1
+  fi
+  local wt_list agent_list
+  wt_list="$(herdr worktree list --cwd "$repo_root" --json 2>/dev/null | grep -m1 '^{')"
+  agent_list="$(herdr agent list --json 2>/dev/null | grep -m1 '^{' || true)"
+  printf '%-30s %-11s %-9s %s\n' "BRANCH" "WORKSPACE" "AGENT" "PATH"
+  local wt_path wt_branch ws_id st
+  while IFS=$'\t' read -r wt_path wt_branch; do
+    [ -z "$wt_path" ] && continue
+    ws_id="$(printf '%s' "$wt_list" | jq -r --arg p "$wt_path" '.result.worktrees[]? | select(.path==$p) | .open_workspace_id // "-"')"
+    st="-"
+    if [ "$ws_id" != "-" ] && [ -n "$ws_id" ] && [ -n "$agent_list" ]; then
+      st="$(printf '%s' "$agent_list" | jq -r --arg w "$ws_id" '[.result.agents[]? | select((.pane_id // "") | startswith($w + ":"))][0].agent_status // "-"' 2>/dev/null || echo '-')"
+    fi
+    printf '%-30s %-11s %-9s %s\n' "$wt_branch" "${ws_id:--}" "$st" "$wt_path"
+  done < <(git -C "$repo_root" worktree list --porcelain \
+    | awk '/^worktree /{p=$2} /^branch refs\/heads\/hwt\//{sub("refs/heads/","",$2); print p "\t" $2}')
+}
+
 # ---- verb ディスパッチ ----
 [ $# -eq 0 ] && { usage; exit 0; }
 verb="$1"; shift
@@ -250,6 +273,7 @@ case "$verb" in
   new)       cmd_new "$@" ;;
   clean)     cmd_clean "$@" ;;
   rm)        cmd_rm "$@" ;;
+  ls)        cmd_ls "$@" ;;
   -h|--help) usage ;;
   *)         echo "hwt: 不明なコマンド '$verb'" >&2; usage >&2; exit 1 ;;
 esac
