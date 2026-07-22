@@ -1,268 +1,64 @@
 #!/usr/bin/env bash
-# dispatch.sh — AI エージェントをローカル(split)か新規worktree(workspace)に送り出す
+# hwt.sh — herdr worktree を楽に扱う CLI / herdr プラグイン本体
 #
 # 使い方:
-#   dispatch.sh                          # モードを対話選択し、プロンプトを聞いて起動
-#   dispatch.sh --local  "プロンプト"     # 現在のリポジトリで split して起動
-#   dispatch.sh --worktree "プロンプト"   # 新規 worktree + workspace で起動
-#   dispatch.sh --worktree -n 3 "..."    # worktree 3本で並列起動
-#   dispatch.sh --worktree --no-prompt   # プロンプトなしで claude だけ起動(指示は手で打つ)
-#   dispatch.sh --discard                # 「今いる dispatch worktree」を確認つきで破棄
-#                                        # (popup キーバインドから使う想定。変更ありでも y で削除)
-#   dispatch.sh --clean                  # dispatch/* worktree の残骸を掃除
-#                                        # (変更なし・独自コミットなしのみ削除、それ以外は保護)
+#   hwt new [-n N] [テキスト]        # 新規 worktree+workspace を作成(agent なし)
+#   hwt new -a [-n N] [テキスト]     # 新規 worktree+workspace + agent 起動
+#   hwt ls                          # 現 repo の hwt/* worktree を一覧
+#   hwt cd                          # worktree の workspace を選んでフォーカス移動
+#   hwt clean                       # hwt/* の残骸を安全に掃除(変更ありは保護)
+#   hwt rm                          # 今いる worktree を確認つきで破棄
 #
 # 環境:
-#   herdr のプラグインアクション/カスタムコマンドから呼ばれる場合は
-#   HERDR_ACTIVE_PANE_CWD が渡される。CLI から直接呼んだ場合は $PWD を使う。
-#   非TTY実行(plugin action等)ではモード未指定はエラー、プロンプトは自動でスキップする。
-#   エージェントコマンドは $DISPATCH_AGENT (デフォルト: claude) で差し替え可能。
-#
-# 動作検証メモ (herdr 0.7.4 実測):
-#   - `herdr worktree create --json` は JSON の前に "ok" 等の行を出す → grep '^{' で抽出
-#   - workspace_id は .result.workspace.workspace_id、パスは .result.worktree.path
-#   - `herdr wait agent-status` は not_implemented → `herdr agent get` のポーリングで代替
-#   - agent の状態遷移(working/idle/blocked)は統合エージェント(claude等)のみ。
-#     プロセス終了で agent 自体が消える(agent_not_found)
+#   plugin action/カスタムコマンドからは HERDR_ACTIVE_PANE_CWD / HERDR_PLUGIN_CONTEXT_JSON が
+#   渡される。CLI 直接実行では $PWD を使う。エージェントは HWT_AGENT(既定 claude)で差し替え可能。
 set -eu
 
-# plugin action は最小 PATH で実行され herdr/jq が見つからないため補完する。
-# herdr 本体の場所は herdr 自身が渡す HERDR_BIN_PATH で解決する(Linux/macOS 両対応・
-# Homebrew パス決め打ちを避ける)。jq/git 等の補助ツール用に一般的な bin を後方に足す。
+# plugin action は最小 PATH で走るため herdr/jq を補完。herdr 本体は HERDR_BIN_PATH で解決。
 if [ -n "${HERDR_BIN_PATH:-}" ]; then
   PATH="$(dirname "$HERDR_BIN_PATH"):$PATH"
 fi
 PATH="$PATH:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
 export PATH
 
-MODE=""
-COUNT=1
-NO_PROMPT=0
-PROMPT=""
-AGENT_CMD="${DISPATCH_AGENT:-claude}"
+AGENT_CMD="${HWT_AGENT:-claude}"
+WATCH_DIR="${HERDR_PLUGIN_STATE_DIR:-${TMPDIR:-/tmp}/herdr-hwt}/watchers"
+MAX_WATCHERS="${HWT_MAX_WATCHERS:-16}"
+case "$MAX_WATCHERS" in ''|*[!0-9]*) MAX_WATCHERS=16 ;; esac
 
 notify() { herdr notification show "$1" ${2:+--sound "$2"} >/dev/null 2>&1 || true; }
 
-while [ $# -gt 0 ]; do
-  case "$1" in
-    -l|--local)    MODE="local" ;;
-    -w|--worktree) MODE="worktree" ;;
-    -n)            shift; COUNT="${1:-1}" ;;
-    --no-prompt)   NO_PROMPT=1 ;;
-    --clean)       MODE="clean" ;;
-    --discard)     MODE="discard" ;;
-    -h|--help)     grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
-    *)             PROMPT="${PROMPT:+$PROMPT }$1" ;;
-  esac
-  shift
-done
-
-# ---- 実行対象ディレクトリの解決 ----
-# 優先順: HERDR_ACTIVE_PANE_CWD (custom command 経由)
-#       → HERDR_PLUGIN_CONTEXT_JSON の focused_pane_cwd (plugin action 経由・実測)
-#       → $PWD (CLI 直接実行)
-# ※ plugin action の $PWD はプラグイン root になるため、そのまま使うと
-#   プラグイン自身の repo に worktree が生えてしまう(実際に起きた事故)
-CWD="${HERDR_ACTIVE_PANE_CWD:-}"
-if [ -z "$CWD" ] && [ -n "${HERDR_PLUGIN_CONTEXT_JSON:-}" ]; then
-  CWD="$(printf '%s' "$HERDR_PLUGIN_CONTEXT_JSON" | jq -r '.focused_pane_cwd // .workspace_cwd // empty' 2>/dev/null || true)"
-fi
-[ -z "$CWD" ] && CWD="$PWD"
-
-if ! [[ "$COUNT" =~ ^[0-9]+$ ]] || [ "$COUNT" -lt 1 ] || [ "$COUNT" -gt 8 ]; then
-  echo "エラー: -n は 1〜8 で指定してください" >&2
-  exit 1
-fi
-
-# ---- discard モード: 「今いる dispatch worktree」を確認つきで破棄 ----
-# popup キーバインド(type = "popup")から呼ぶ想定。変更が残っていても、
-# 内容を見せた上で y と答えたら workspace・worktree・ブランチごと削除する。
-if [ "$MODE" = "discard" ]; then
-  # 今いる場所が dispatch/* ブランチの worktree かを確認
-  BR="$(git -C "$CWD" branch --show-current 2>/dev/null || true)"
-  WT_ROOT="$(git -C "$CWD" rev-parse --show-toplevel 2>/dev/null || true)"
-  case "$BR" in
-    dispatch/*) ;;
-    *)
-      echo "ここは dispatch worktree ではありません (branch: ${BR:-なし})"
-      echo "誤爆防止のため、dispatch/* ブランチの worktree でのみ使えます。"
-      echo "Enter で閉じる..."; read -r _
-      exit 1
-      ;;
-  esac
-
-  # 中身のサマリを見せる
-  MAIN_GIT_DIR="$(git -C "$WT_ROOT" rev-parse --git-common-dir)"
-  MAIN_ROOT="$(dirname "$MAIN_GIT_DIR")"
-  echo "破棄対象: $WT_ROOT"
-  echo "ブランチ: $BR"
-  dirty_count="$(git -C "$WT_ROOT" status --porcelain | wc -l | tr -d ' ')"
-  unique="$(git -C "$MAIN_ROOT" rev-list --count "$BR" --not --exclude="$BR" --branches --remotes 2>/dev/null || echo '?')"
-  echo "未コミットの変更: ${dirty_count} ファイル / 独自コミット: ${unique} 件"
-  if [ "$dirty_count" != "0" ]; then
-    echo "--- 変更ファイル ---"
-    git -C "$WT_ROOT" status --porcelain | head -10
+# 対象 repo の cwd を解決（plugin action の $PWD はプラグイン root なので使わない）
+resolve_cwd() {
+  local c="${HERDR_ACTIVE_PANE_CWD:-}"
+  if [ -z "$c" ] && [ -n "${HERDR_PLUGIN_CONTEXT_JSON:-}" ]; then
+    c="$(printf '%s' "$HERDR_PLUGIN_CONTEXT_JSON" | jq -r '.focused_pane_cwd // .workspace_cwd // empty' 2>/dev/null || true)"
   fi
-  echo ""
-  printf "この worktree・ブランチ・workspace を完全に破棄しますか? [y/N] "
-  read -r ans
-  case "$ans" in
-    y|Y|yes) ;;
-    *) echo "中止しました"; exit 0 ;;
-  esac
-
-  # workspace を特定して herdr 経由で削除(タブごと)、残骸は git で始末
-  WS_ID="$(herdr worktree list --cwd "$MAIN_ROOT" --json 2>/dev/null | grep -m1 '^{' \
-    | jq -r --arg p "$WT_ROOT" '.result.worktrees[]? | select(.path == $p) | .open_workspace_id // empty')"
-  if [ -n "$WS_ID" ]; then
-    herdr worktree remove --workspace "$WS_ID" --force >/dev/null 2>&1 || true
-  fi
-  git -C "$MAIN_ROOT" worktree remove --force "$WT_ROOT" >/dev/null 2>&1 || true
-  git -C "$MAIN_ROOT" worktree prune >/dev/null 2>&1 || true
-  git -C "$MAIN_ROOT" branch -D "$BR" >/dev/null 2>&1 || true
-  notify "dispatch: $BR を破棄しました" done
-  exit 0
-fi
-
-# ---- clean モード: dispatch/* worktree の残骸を安全に掃除 ----
-# 「変更なし かつ 独自コミットなし」のものだけ worktree + ブランチを削除する。
-# 変更や独自コミットが残っているものは保護して一覧表示する。
-if [ "$MODE" = "clean" ]; then
-  if ! REPO_ROOT="$(git -C "$CWD" rev-parse --show-toplevel 2>/dev/null)"; then
-    notify "dispatch clean: $CWD は git リポジトリではありません" request
-    echo "エラー: $CWD は git リポジトリではありません" >&2
-    exit 1
-  fi
-  removed=0; kept=0; kept_list=""
-  # herdr 側で workspace が開いているものを対応付ける
-  OPEN_MAP="$(herdr worktree list --cwd "$REPO_ROOT" --json 2>/dev/null | grep -m1 '^{' \
-    | jq -r '.result.worktrees[]? | select(.open_workspace_id != null) | "\(.path)\t\(.open_workspace_id)"' 2>/dev/null || true)"
-
-  # このリポジトリの dispatch/* ブランチを持つ worktree を列挙
-  while IFS=$'\t' read -r WT_PATH WT_BRANCH; do
-    [ -z "$WT_PATH" ] && continue
-    dirty="$(git -C "$WT_PATH" status --porcelain 2>/dev/null | head -1)"
-    # --exclude のパターンは --branches に対しては refs/heads/ を除いた短い名前でマッチする
-    # (refs/heads/ 付きだと除外が効かず、独自コミットが常に 0 になり誤削除する。実測済み)
-    unique="$(git -C "$REPO_ROOT" rev-list --count "$WT_BRANCH" --not --exclude="$WT_BRANCH" --branches --remotes 2>/dev/null || echo 999)"
-    if [ -z "$dirty" ] && [ "$unique" = "0" ]; then
-      # 開いている workspace があれば herdr 経由で(タブごと)削除、なければ git で削除
-      WS_ID="$(printf '%s\n' "$OPEN_MAP" | awk -F'\t' -v p="$WT_PATH" '$1==p {print $2}')"
-      if [ -n "$WS_ID" ]; then
-        herdr worktree remove --workspace "$WS_ID" --force >/dev/null 2>&1 || true
-      fi
-      git -C "$REPO_ROOT" worktree remove --force "$WT_PATH" >/dev/null 2>&1 || true
-      git -C "$REPO_ROOT" worktree prune >/dev/null 2>&1 || true
-      git -C "$REPO_ROOT" branch -D "$WT_BRANCH" >/dev/null 2>&1 || true
-      echo "削除: $WT_BRANCH ($WT_PATH)"
-      removed=$((removed + 1))
-    else
-      reason=""
-      [ -n "$dirty" ] && reason="未コミットの変更あり"
-      [ "$unique" != "0" ] && reason="${reason:+$reason / }独自コミット ${unique} 件"
-      echo "保護: $WT_BRANCH — $reason"
-      kept=$((kept + 1)); kept_list="${kept_list:+$kept_list, }$WT_BRANCH"
-    fi
-  done < <(git -C "$REPO_ROOT" worktree list --porcelain \
-    | awk '/^worktree /{p=$2} /^branch refs\/heads\/dispatch\//{sub("refs/heads/","",$2); print p "\t" $2}')
-
-  echo ""
-  echo "掃除完了: 削除 ${removed} 件 / 保護 ${kept} 件"
-  notify "dispatch clean: 削除 ${removed} / 保護 ${kept}${kept_list:+ ($kept_list)}" done
-  exit 0
-fi
-
-# ---- モード選択(未指定なら対話。非TTYなら明示エラー) ----
-if [ -z "$MODE" ]; then
-  if [ ! -t 0 ]; then
-    notify "dispatch: モード未指定です。prefix+D (worktree直行) を使うか、CLI から -l/-w を指定してください" request
-    echo "エラー: 非TTY実行ではモード(-l/-w)の指定が必須です" >&2
-    exit 1
-  fi
-  echo "実行先を選択:"
-  echo "  1) local    — 今のリポジトリで split して起動"
-  echo "  2) worktree — 新規 worktree + workspace で起動"
-  printf "> "
-  read -r choice
-  case "$choice" in
-    1|l|local)    MODE="local" ;;
-    2|w|worktree) MODE="worktree" ;;
-    *) echo "中止しました" >&2; exit 1 ;;
-  esac
-fi
-
-# ---- プロンプト入力(未指定なら対話。非TTYなら自動スキップ) ----
-if [ -z "$PROMPT" ] && [ "$NO_PROMPT" -eq 0 ] && [ -t 0 ]; then
-  printf "エージェントへの指示 (空Enterで指示なし起動): "
-  read -r PROMPT
-fi
-
-# ---- worktree モードは git リポジトリ必須 ----
-if [ "$MODE" = "worktree" ]; then
-  if ! git -C "$CWD" rev-parse --show-toplevel >/dev/null 2>&1; then
-    notify "dispatch: $CWD は git リポジトリではありません" request
-    echo "エラー: $CWD は git リポジトリではありません (worktree モードは git 必須)" >&2
-    exit 1
-  fi
-fi
-
-# ---- 名前・ブランチ生成 ----
-# NAME には必ずタイムスタンプを含める(同名 agent の衝突防止)
-slugify() {
-  printf '%s' "$1" | tr -c 'a-zA-Z0-9' '-' | tr -s '-' | sed 's/^-//; s/-$//' | cut -c1-24
+  [ -z "$c" ] && c="$PWD"
+  printf '%s' "$c"
 }
-STAMP="$(date +%m%d-%H%M%S)"
-SLUG="$(slugify "$PROMPT")"
-[ -z "$SLUG" ] && SLUG="dispatch"
 
-# herdr 0.7.5 の agent 名は [a-z][a-z0-9_-]{0,31} (先頭は小文字・小文字/数字/-/_ のみ・最大32文字)。
-# ブランチ名は大文字を許容するため SLUG をそのまま使い、agent 名だけ別途正規化する。
-# stamp(11) + 区切り + 並列インデックス分を確保するため slug は小文字化して 18 文字に詰める。
-AGENT_SLUG="$(printf '%s' "$SLUG" | tr 'A-Z' 'a-z' | tr -cs 'a-z0-9' '-' | sed 's/^-*//; s/-*$//' | cut -c1-18 | sed 's/-*$//')"
-case "$AGENT_SLUG" in [a-z]*) ;; *) AGENT_SLUG="d${AGENT_SLUG}" ;; esac
-[ -z "$AGENT_SLUG" ] && AGENT_SLUG="dispatch"
+slugify() { printf '%s' "$1" | tr -c 'a-zA-Z0-9' '-' | tr -s '-' | sed 's/^-//; s/-$//' | cut -c1-24; }
 
 # ---- 完了ウォッチャ(バックグラウンド・ポーリング) ----
-# herdr 0.7.4 は wait agent-status が未実装のため agent get をポーリングする。
-# idle/blocked = エージェントが手を止めた(完了 or 入力待ち) → 通知
-# agent_not_found = プロセス終了で pane が閉じた → 通知
-#
-# 監視プロセスが無制限に溜まらないよう pidfile で登録し、起動のたびに死んだものを
-# 掃除して同時数に上限を設ける。状態は herdr が渡す HERDR_PLUGIN_STATE_DIR に置く
-# (CLI 直接実行時は TMPDIR にフォールバック)。
-WATCH_DIR="${HERDR_PLUGIN_STATE_DIR:-${TMPDIR:-/tmp}/herdr-dispatch}/watchers"
-MAX_WATCHERS="${DISPATCH_MAX_WATCHERS:-16}"
-# 非数値が渡ると -ge がエラーになり cap が無効化されるため既定値に正規化する
-case "$MAX_WATCHERS" in
-  ''|*[!0-9]*) MAX_WATCHERS=16 ;;
-esac
-
 prune_dead_watchers() {
   [ -d "$WATCH_DIR" ] || return 0
   local pf pid
   for pf in "$WATCH_DIR"/*.pid; do
     [ -e "$pf" ] || continue
     pid="$(cat "$pf" 2>/dev/null || true)"
-    if [ -z "$pid" ] || ! kill -0 "$pid" 2>/dev/null; then
-      rm -f "$pf"
-    fi
+    if [ -z "$pid" ] || ! kill -0 "$pid" 2>/dev/null; then rm -f "$pf"; fi
   done
 }
 
 live_watcher_count() {
-  # find の -maxdepth に依存せず glob で数える(全プラットフォームで確実)。
-  # マッチ 0 件のときは '*.pid' が literal のまま来るので [ -e ] で弾く。
   local n=0 pf
-  for pf in "$WATCH_DIR"/*.pid; do
-    [ -e "$pf" ] && n=$((n + 1))
-  done
+  for pf in "$WATCH_DIR"/*.pid; do [ -e "$pf" ] && n=$((n + 1)); done
   echo "$n"
 }
 
 watch_agent() {
   local target="$1"
-  # 状態ディレクトリを作れないときは未追跡 watcher を残さないよう監視をスキップ
-  # (エージェント自体は起動済み。通知だけ諦める)。
   if ! mkdir -p "$WATCH_DIR" 2>/dev/null; then
     echo "⚠️ watcher 状態ディレクトリを作成できず $target の完了通知はスキップします ($WATCH_DIR)" >&2
     return 0
@@ -273,103 +69,118 @@ watch_agent() {
     return 0
   fi
   (
-    local deadline=$(( $(date +%s) + 7200 ))  # 最長2時間
-    sleep 30  # 起動直後の unknown/idle を拾わないよう助走を置く
+    local deadline=$(( $(date +%s) + 7200 ))
+    sleep 30
     while [ "$(date +%s)" -lt "$deadline" ]; do
       local out status
       if ! out="$(herdr agent get "$target" 2>/dev/null)"; then
-        notify "dispatch: $target が終了しました (pane クローズ)" done
+        notify "hwt: $target が終了しました (pane クローズ)" done
         return
       fi
       status="$(printf '%s' "$out" | grep '^{' | jq -r '.result.agent.agent_status // .result.agent_status // "unknown"' 2>/dev/null || echo unknown)"
       case "$status" in
-        idle)    notify "dispatch: $target が完了 (idle)" done; return ;;
-        blocked) notify "dispatch: $target が入力待ち (blocked)" request; return ;;
+        idle)    notify "hwt: $target が完了 (idle)" done; return ;;
+        blocked) notify "hwt: $target が入力待ち (blocked)" request; return ;;
       esac
       sleep 20
     done
-    notify "dispatch: $target の監視が2時間でタイムアウトしました" request
+    notify "hwt: $target の監視が2時間でタイムアウトしました" request
   ) >/dev/null 2>&1 &
-  # バックグラウンド watcher の PID を親側で記録する。$BASHPID は macOS 同梱の
-  # bash 3.2 に無く set -u で落ちるため使わない。終了済み watcher の pidfile は
-  # 次回起動時に prune_dead_watchers が掃除する。
   local wpid=$!
-  # pidfile を書けなければ未追跡 watcher になってしまうので、その watcher は止める
   if ! echo "$wpid" > "$WATCH_DIR/watch-${wpid}.pid" 2>/dev/null; then
     kill "$wpid" 2>/dev/null || true
   fi
 }
 
-# ---- 起動 ----
-launched=()
-for i in $(seq 1 "$COUNT"); do
-  if [ "$COUNT" -gt 1 ]; then
-    NAME="${AGENT_SLUG}-${STAMP}-${i}"
-    BRANCH="dispatch/${STAMP}-${SLUG}-${i}"
-  else
-    NAME="${AGENT_SLUG}-${STAMP}"
-    BRANCH="dispatch/${STAMP}-${SLUG}"
-  fi
-
-  if [ "$MODE" = "worktree" ]; then
-    # 単発 dispatch は新しい workspace にフォーカスを移す(押しても何も見えない問題の回避)。
-    # 並列時は元の場所に留まる。
-    FOCUS_OPT="--no-focus"
-    [ "$COUNT" -eq 1 ] && FOCUS_OPT="--focus"
-    # herdr が worktree checkout + workspace 作成 + 親workspaceへのグループ化まで行う。
-    # --json でも JSON 以外の行が混ざるので '^{' の行だけを抽出する(実測)
-    WT_JSON="$(herdr worktree create --cwd "$CWD" --branch "$BRANCH" --label "$NAME" "$FOCUS_OPT" --json | grep -m1 '^{')"
-    WS_ID="$(printf '%s' "$WT_JSON" | jq -r '.result.workspace.workspace_id // empty')"
-    # 0.7.5 でパスは .result.workspace.worktree.checkout_path に移動(旧 .result.worktree.path も許容)
-    WT_PATH="$(printf '%s' "$WT_JSON" | jq -r '.result.workspace.worktree.checkout_path // .result.worktree.path // empty')"
-    PANE_ID="$(printf '%s' "$WT_JSON" | jq -r '.result.root_pane.pane_id // empty')"
-    if [ -z "$WS_ID" ] || [ -z "$WT_PATH" ] || [ -z "$PANE_ID" ]; then
-      notify "dispatch: worktree 作成に失敗しました" request
-      echo "エラー: worktree 作成結果を解析できません: $WT_JSON" >&2
-      exit 1
-    fi
-    echo "→ worktree: $WT_PATH (branch $BRANCH, workspace $WS_ID, agent $NAME)"
-  else
-    # local: 1本目は現在ペインを右 split、2本目以降は同 workspace の新タブ
-    if [ "$i" -eq 1 ]; then
-      PANE_JSON="$(herdr pane split --current --direction right --no-focus --cwd "$CWD" | grep -m1 '^{')"
-      PANE_ID="$(printf '%s' "$PANE_JSON" | jq -r '.result.pane.pane_id // empty')"
-    else
-      TAB_JSON="$(herdr tab create --cwd "$CWD" --label "$NAME" | grep -m1 '^{')"
-      TAB_ID="$(printf '%s' "$TAB_JSON" | jq -r '.result.tab.tab_id // empty')"
-      PANE_ID="$(herdr pane list | grep -m1 '^{' | jq -r --arg t "$TAB_ID" '[.result.panes[] | select(.tab_id == $t)][0].pane_id // empty')"
-    fi
-    if [ -z "$PANE_ID" ]; then
-      notify "dispatch: ペイン作成に失敗しました" request
-      echo "エラー: 起動先ペインを特定できません" >&2
-      exit 1
-    fi
-    echo "→ local: $CWD (agent $NAME)"
-  fi
-
-  # 0.7.5 で agent start は「既存ペインに --kind/--pane 指定で起動」する方式に変更された。
-  # 作成直後のペインはシェルが上がりきっておらず agent_pane_busy になるためリトライする。
-  START_ARGS=("$NAME" --kind "$AGENT_CMD" --pane "$PANE_ID")
-  [ -n "$PROMPT" ] && START_ARGS+=(-- "$PROMPT")
-  started=0
-  start_err=""
+# 既存ペインに agent を起動(0.7.5 方式)。作成直後は agent_pane_busy になるためリトライ。
+start_agent_in_pane() {
+  local name="$1" pane_id="$2" prompt="$3"
+  local args=("$name" --kind "$AGENT_CMD" --pane "$pane_id")
+  [ -n "$prompt" ] && args+=(-- "$prompt")
+  local started=0 start_err="" _try
   for _try in $(seq 1 30); do
-    if start_err="$(herdr agent start "${START_ARGS[@]}" 2>&1 >/dev/null)"; then
-      started=1
-      break
-    fi
+    if start_err="$(herdr agent start "${args[@]}" 2>&1 >/dev/null)"; then started=1; break; fi
     sleep 0.5
   done
   if [ "$started" -ne 1 ]; then
-    notify "dispatch: $NAME の起動に失敗しました (pane $PANE_ID)" request
+    notify "hwt: $name の起動に失敗しました (pane $pane_id)" request
     echo "エラー: agent start が失敗しました: $(printf '%s' "$start_err" | tail -1)" >&2
-    exit 1
+    return 1
   fi
+}
 
-  watch_agent "$NAME"
-  launched+=("$NAME")
-done
+usage() {
+  cat <<'EOF'
+hwt — herdr worktree を楽に扱う
 
-echo ""
-echo "起動完了: ${launched[*]}"
-echo "状態確認: herdr agent list / サイドバー。idle/blocked になったら通知します。"
+  hwt new [-n N] [テキスト]      新規 worktree+workspace(agent なし)
+  hwt new -a [-n N] [テキスト]   新規 worktree+workspace + agent 起動
+  hwt ls                        現 repo の hwt/* worktree を一覧
+  hwt cd                        worktree の workspace を選んで移動
+  hwt clean                     hwt/* の残骸を安全に掃除(変更ありは保護)
+  hwt rm                        今いる worktree を確認つき破棄
+EOF
+}
+
+# ---- verb: new ----
+cmd_new() {
+  local with_agent=0 count=1 text=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -a|--agent) with_agent=1 ;;
+      -n) shift; count="${1:-1}" ;;
+      -h|--help) echo "usage: hwt new [-a] [-n N] [テキスト]"; return 0 ;;
+      -*) echo "hwt new: 不明なオプション $1" >&2; return 1 ;;
+      *) text="${text:+$text }$1" ;;
+    esac
+    shift
+  done
+  if ! [[ "$count" =~ ^[0-9]+$ ]] || [ "$count" -lt 1 ] || [ "$count" -gt 8 ]; then
+    echo "エラー: -n は 1〜8 で指定してください" >&2; return 1
+  fi
+  local cwd; cwd="$(resolve_cwd)"
+  if ! git -C "$cwd" rev-parse --show-toplevel >/dev/null 2>&1; then
+    notify "hwt: $cwd は git リポジトリではありません" request
+    echo "エラー: $cwd は git リポジトリではありません" >&2; return 1
+  fi
+  local stamp slug agent_slug
+  stamp="$(date +%Y%m%d-%H%M%S)"
+  slug="$(slugify "$text")"; [ -z "$slug" ] && slug="hwt"
+  agent_slug="$(printf '%s' "$slug" | tr 'A-Z' 'a-z' | tr -cs 'a-z0-9' '-' | sed 's/^-*//; s/-*$//' | cut -c1-18 | sed 's/-*$//')"
+  case "$agent_slug" in [a-z]*) ;; *) agent_slug="h${agent_slug}" ;; esac
+  [ -z "$agent_slug" ] && agent_slug="hwt"
+
+  local launched=() i name branch focus_opt wt_json ws_id wt_path pane_id
+  for i in $(seq 1 "$count"); do
+    if [ "$count" -gt 1 ]; then name="${agent_slug}-${stamp}-${i}"; branch="hwt/${stamp}-${slug}-${i}"
+    else name="${agent_slug}-${stamp}"; branch="hwt/${stamp}-${slug}"; fi
+    focus_opt="--no-focus"; [ "$count" -eq 1 ] && focus_opt="--focus"
+    wt_json="$(herdr worktree create --cwd "$cwd" --branch "$branch" --label "$name" "$focus_opt" --json | grep -m1 '^{')"
+    ws_id="$(printf '%s' "$wt_json" | jq -r '.result.workspace.workspace_id // empty')"
+    wt_path="$(printf '%s' "$wt_json" | jq -r '.result.workspace.worktree.checkout_path // .result.worktree.path // empty')"
+    pane_id="$(printf '%s' "$wt_json" | jq -r '.result.root_pane.pane_id // empty')"
+    if [ -z "$ws_id" ] || [ -z "$wt_path" ] || [ -z "$pane_id" ]; then
+      notify "hwt: worktree 作成に失敗しました" request
+      echo "エラー: worktree 作成結果を解析できません: $wt_json" >&2; return 1
+    fi
+    echo "→ worktree: $wt_path (branch $branch, workspace $ws_id)"
+    if [ "$with_agent" -eq 1 ]; then
+      start_agent_in_pane "$name" "$pane_id" "$text" || return 1
+      watch_agent "$name"
+      launched+=("$name")
+    fi
+  done
+  if [ "$with_agent" -eq 1 ]; then
+    echo ""; echo "起動完了: ${launched[*]}"
+    echo "状態確認: hwt ls / herdr サイドバー。idle/blocked で通知します。"
+  fi
+}
+
+# ---- verb ディスパッチ ----
+[ $# -eq 0 ] && { usage; exit 0; }
+verb="$1"; shift
+case "$verb" in
+  new)       cmd_new "$@" ;;
+  -h|--help) usage ;;
+  *)         echo "hwt: 不明なコマンド '$verb'" >&2; usage >&2; exit 1 ;;
+esac
