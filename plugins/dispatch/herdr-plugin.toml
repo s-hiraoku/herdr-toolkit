@@ -1,7 +1,7 @@
 id = "s-hiraoku.dispatch"
 name = "Dispatch"
-version = "0.1.0"
-min_herdr_version = "0.7.0"
+version = "0.2.0"
+min_herdr_version = "0.7.5"
 description = "Launch an AI coding agent locally (split pane) or in a fresh git worktree workspace, with optional N-way parallel runs and done-notifications."
 platforms = ["linux", "macos"]
 
