@@ -19,7 +19,10 @@ for manifest in "$REPO_DIR"/plugins/*/herdr-plugin.toml; do
   plugin_dir="$(dirname "$manifest")"
   name="$(basename "$plugin_dir")"
   echo "→ link plugin: $name"
-  herdr plugin link "$plugin_dir" >/dev/null 2>&1 || herdr plugin link "$plugin_dir" || true
+  if ! herdr plugin link "$plugin_dir" >/dev/null 2>&1; then
+    echo "  retry link: $plugin_dir" >&2
+    herdr plugin link "$plugin_dir" || { echo "エラー: plugin link に失敗しました: $plugin_dir" >&2; exit 1; }
+  fi
   # CLI を公開するプラグイン(<name>.sh を持つ)は PATH に symlink
   if [ -f "$plugin_dir/$name.sh" ]; then
     ln -sf "$plugin_dir/$name.sh" "$BIN_DIR/$name"
