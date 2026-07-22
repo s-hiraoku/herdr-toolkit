@@ -176,11 +176,45 @@ cmd_new() {
   fi
 }
 
+# ---- verb: clean ----
+cmd_clean() {
+  local cwd repo_root; cwd="$(resolve_cwd)"
+  if ! repo_root="$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null)"; then
+    notify "hwt clean: $cwd は git リポジトリではありません" request
+    echo "エラー: $cwd は git リポジトリではありません" >&2; return 1
+  fi
+  local removed=0 kept=0 kept_list="" open_map
+  open_map="$(herdr worktree list --cwd "$repo_root" --json 2>/dev/null | grep -m1 '^{' \
+    | jq -r '.result.worktrees[]? | select(.open_workspace_id != null) | "\(.path)\t\(.open_workspace_id)"' 2>/dev/null || true)"
+  local wt_path wt_branch dirty unique ws_id reason
+  while IFS=$'\t' read -r wt_path wt_branch; do
+    [ -z "$wt_path" ] && continue
+    dirty="$(git -C "$wt_path" status --porcelain 2>/dev/null | head -1)"
+    unique="$(git -C "$repo_root" rev-list --count "$wt_branch" --not --exclude="$wt_branch" --branches --remotes 2>/dev/null || echo 999)"
+    if [ -z "$dirty" ] && [ "$unique" = "0" ]; then
+      ws_id="$(printf '%s\n' "$open_map" | awk -F'\t' -v p="$wt_path" '$1==p {print $2}')"
+      [ -n "$ws_id" ] && herdr worktree remove --workspace "$ws_id" --force >/dev/null 2>&1 || true
+      git -C "$repo_root" worktree remove --force "$wt_path" >/dev/null 2>&1 || true
+      git -C "$repo_root" worktree prune >/dev/null 2>&1 || true
+      git -C "$repo_root" branch -D "$wt_branch" >/dev/null 2>&1 || true
+      echo "削除: $wt_branch ($wt_path)"; removed=$((removed + 1))
+    else
+      reason=""; [ -n "$dirty" ] && reason="未コミットの変更あり"
+      [ "$unique" != "0" ] && reason="${reason:+$reason / }独自コミット ${unique} 件"
+      echo "保護: $wt_branch — $reason"; kept=$((kept + 1)); kept_list="${kept_list:+$kept_list, }$wt_branch"
+    fi
+  done < <(git -C "$repo_root" worktree list --porcelain \
+    | awk '/^worktree /{p=$2} /^branch refs\/heads\/hwt\//{sub("refs/heads/","",$2); print p "\t" $2}')
+  echo ""; echo "掃除完了: 削除 ${removed} 件 / 保護 ${kept} 件"
+  notify "hwt clean: 削除 ${removed} / 保護 ${kept}${kept_list:+ ($kept_list)}" done
+}
+
 # ---- verb ディスパッチ ----
 [ $# -eq 0 ] && { usage; exit 0; }
 verb="$1"; shift
 case "$verb" in
   new)       cmd_new "$@" ;;
+  clean)     cmd_clean "$@" ;;
   -h|--help) usage ;;
   *)         echo "hwt: 不明なコマンド '$verb'" >&2; usage >&2; exit 1 ;;
 esac
