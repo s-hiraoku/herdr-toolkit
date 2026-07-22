@@ -232,6 +232,10 @@ case "$AGENT_SLUG" in [a-z]*) ;; *) AGENT_SLUG="d${AGENT_SLUG}" ;; esac
 # (CLI 直接実行時は TMPDIR にフォールバック)。
 WATCH_DIR="${HERDR_PLUGIN_STATE_DIR:-${TMPDIR:-/tmp}/herdr-dispatch}/watchers"
 MAX_WATCHERS="${DISPATCH_MAX_WATCHERS:-16}"
+# 非数値が渡ると -ge がエラーになり cap が無効化されるため既定値に正規化する
+case "$MAX_WATCHERS" in
+  ''|*[!0-9]*) MAX_WATCHERS=16 ;;
+esac
 
 prune_dead_watchers() {
   [ -d "$WATCH_DIR" ] || return 0
@@ -246,13 +250,23 @@ prune_dead_watchers() {
 }
 
 live_watcher_count() {
-  [ -d "$WATCH_DIR" ] || { echo 0; return; }
-  find "$WATCH_DIR" -maxdepth 1 -name '*.pid' 2>/dev/null | wc -l | tr -d ' '
+  # find の -maxdepth に依存せず glob で数える(全プラットフォームで確実)。
+  # マッチ 0 件のときは '*.pid' が literal のまま来るので [ -e ] で弾く。
+  local n=0 pf
+  for pf in "$WATCH_DIR"/*.pid; do
+    [ -e "$pf" ] && n=$((n + 1))
+  done
+  echo "$n"
 }
 
 watch_agent() {
   local target="$1"
-  mkdir -p "$WATCH_DIR"
+  # 状態ディレクトリを作れないときは未追跡 watcher を残さないよう監視をスキップ
+  # (エージェント自体は起動済み。通知だけ諦める)。
+  if ! mkdir -p "$WATCH_DIR" 2>/dev/null; then
+    echo "⚠️ watcher 状態ディレクトリを作成できず $target の完了通知はスキップします ($WATCH_DIR)" >&2
+    return 0
+  fi
   prune_dead_watchers
   if [ "$(live_watcher_count)" -ge "$MAX_WATCHERS" ]; then
     echo "⚠️ 完了監視が上限(${MAX_WATCHERS}件)に達したため $target の通知はスキップします" >&2
@@ -280,7 +294,10 @@ watch_agent() {
   # bash 3.2 に無く set -u で落ちるため使わない。終了済み watcher の pidfile は
   # 次回起動時に prune_dead_watchers が掃除する。
   local wpid=$!
-  echo "$wpid" > "$WATCH_DIR/watch-${wpid}.pid"
+  # pidfile を書けなければ未追跡 watcher になってしまうので、その watcher は止める
+  if ! echo "$wpid" > "$WATCH_DIR/watch-${wpid}.pid" 2>/dev/null; then
+    kill "$wpid" 2>/dev/null || true
+  fi
 }
 
 # ---- 起動 ----
