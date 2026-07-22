@@ -26,7 +26,14 @@ WATCH_DIR="${HERDR_PLUGIN_STATE_DIR:-${TMPDIR:-/tmp}/herdr-hwt}/watchers"
 MAX_WATCHERS="${HWT_MAX_WATCHERS:-16}"
 case "$MAX_WATCHERS" in ''|*[!0-9]*) MAX_WATCHERS=16 ;; esac
 
-notify() { herdr notification show "$1" ${2:+--sound "$2"} >/dev/null 2>&1 || true; }
+notify() {
+  # ${2:+--sound "$2"} は展開後もクォートが literal に残り sound 名が壊れるため分岐で渡す
+  if [ -n "${2:-}" ]; then
+    herdr notification show "$1" --sound "$2" >/dev/null 2>&1 || true
+  else
+    herdr notification show "$1" >/dev/null 2>&1 || true
+  fi
+}
 
 # 対象 repo の cwd を解決（plugin action の $PWD はプラグイン root なので使わない）
 resolve_cwd() {
@@ -143,10 +150,13 @@ cmd_new() {
     notify "hwt: $cwd は git リポジトリではありません" request
     echo "エラー: $cwd は git リポジトリではありません" >&2; return 1
   fi
-  local stamp slug agent_slug
-  stamp="$(date +%Y%m%d-%H%M%S)"
+  local stamp slug agent_slug slug_cap
+  stamp="$(date +%Y%m%d-%H%M%S)"   # 15 文字
   slug="$(slugify "$text")"; [ -z "$slug" ] && slug="hwt"
-  agent_slug="$(printf '%s' "$slug" | tr 'A-Z' 'a-z' | tr -cs 'a-z0-9' '-' | sed 's/^-*//; s/-*$//' | cut -c1-18 | sed 's/-*$//')"
+  # herdr の agent 名は最大 32 文字。name = <agent_slug>-<stamp(15)>[-<i>] なので、
+  # 単発は slug<=16、並列(-i 付き)は slug<=14 に詰める。
+  slug_cap=16; [ "$count" -gt 1 ] && slug_cap=14
+  agent_slug="$(printf '%s' "$slug" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-' | sed 's/^-*//; s/-*$//' | cut -c1-"$slug_cap" | sed 's/-*$//')"
   case "$agent_slug" in [a-z]*) ;; *) agent_slug="h${agent_slug}" ;; esac
   [ -z "$agent_slug" ] && agent_slug="hwt"
 
@@ -183,12 +193,23 @@ cmd_clean() {
     notify "hwt clean: $cwd は git リポジトリではありません" request
     echo "エラー: $cwd は git リポジトリではありません" >&2; return 1
   fi
-  local removed=0 kept=0 kept_list="" open_map
-  open_map="$(herdr worktree list --cwd "$repo_root" --json 2>/dev/null | grep -m1 '^{' \
-    | jq -r '.result.worktrees[]? | select(.open_workspace_id != null) | "\(.path)\t\(.open_workspace_id)"' 2>/dev/null || true)"
+  # workspace 一覧を取得。取得/解析に失敗したら fail-closed(workspace を閉じずに
+  # git worktree だけ消して孤立 workspace を残すのを防ぐため中断する)。
+  local removed=0 kept=0 kept_list="" wt_list open_map cur_root
+  wt_list="$(herdr worktree list --cwd "$repo_root" --json 2>/dev/null | grep -m1 '^{')"
+  if [ -z "$wt_list" ] || ! printf '%s' "$wt_list" | jq -e . >/dev/null 2>&1; then
+    notify "hwt clean: worktree 一覧を取得できず中断しました" request
+    echo "エラー: herdr worktree list を取得/解析できません。中断します。" >&2; return 1
+  fi
+  open_map="$(printf '%s' "$wt_list" | jq -r '.result.worktrees[]? | select(.open_workspace_id != null) | "\(.path)\t\(.open_workspace_id)"')"
+  cur_root="$(cd "$repo_root" 2>/dev/null && pwd -P || printf '%s' "$repo_root")"
   local wt_path wt_branch dirty unique ws_id reason
   while IFS=$'\t' read -r wt_path wt_branch; do
     [ -z "$wt_path" ] && continue
+    # 実行中の worktree(=カレント)は消さない。破棄したいときは hwt rm を使う。
+    if [ "$(cd "$wt_path" 2>/dev/null && pwd -P || printf '%s' "$wt_path")" = "$cur_root" ]; then
+      echo "スキップ(実行中の worktree): $wt_branch — 破棄は hwt rm を使ってください"; continue
+    fi
     dirty="$(git -C "$wt_path" status --porcelain 2>/dev/null | head -1)"
     unique="$(git -C "$repo_root" rev-list --count "$wt_branch" --not --exclude="$wt_branch" --branches --remotes 2>/dev/null || echo 999)"
     if [ -z "$dirty" ] && [ "$unique" = "0" ]; then
@@ -204,7 +225,7 @@ cmd_clean() {
       echo "保護: $wt_branch — $reason"; kept=$((kept + 1)); kept_list="${kept_list:+$kept_list, }$wt_branch"
     fi
   done < <(git -C "$repo_root" worktree list --porcelain \
-    | awk '/^worktree /{p=$2} /^branch refs\/heads\/hwt\//{sub("refs/heads/","",$2); print p "\t" $2}')
+    | awk '/^worktree /{p=substr($0,10)} /^branch refs\/heads\/hwt\//{sub("refs/heads/","",$2); print p "\t" $2}')
   echo ""; echo "掃除完了: 削除 ${removed} 件 / 保護 ${kept} 件"
   notify "hwt clean: 削除 ${removed} / 保護 ${kept}${kept_list:+ ($kept_list)}" done
 }
@@ -263,7 +284,7 @@ cmd_ls() {
     fi
     printf '%-30s %-11s %-9s %s\n' "$wt_branch" "${ws_id:--}" "$st" "$wt_path"
   done < <(git -C "$repo_root" worktree list --porcelain \
-    | awk '/^worktree /{p=$2} /^branch refs\/heads\/hwt\//{sub("refs/heads/","",$2); print p "\t" $2}')
+    | awk '/^worktree /{p=substr($0,10)} /^branch refs\/heads\/hwt\//{sub("refs/heads/","",$2); print p "\t" $2}')
 }
 
 # ---- verb: cd (worktree の workspace へ移動) ----
@@ -275,7 +296,7 @@ cmd_cd() {
   local wt_list rows sel ws_id n
   wt_list="$(herdr worktree list --cwd "$repo_root" --json 2>/dev/null | grep -m1 '^{')"
   rows="$(git -C "$repo_root" worktree list --porcelain \
-    | awk '/^worktree /{p=$2} /^branch refs\/heads\/hwt\//{sub("refs/heads/","",$2); print p "\t" $2}' \
+    | awk '/^worktree /{p=substr($0,10)} /^branch refs\/heads\/hwt\//{sub("refs/heads/","",$2); print p "\t" $2}' \
     | while IFS=$'\t' read -r p b; do
         wid="$(printf '%s' "$wt_list" | jq -r --arg p "$p" '.result.worktrees[]? | select(.path==$p) | .open_workspace_id // empty')"
         [ -n "$wid" ] && printf '%s\t%s\n' "$wid" "$b"
