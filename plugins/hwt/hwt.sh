@@ -266,6 +266,32 @@ cmd_ls() {
     | awk '/^worktree /{p=$2} /^branch refs\/heads\/hwt\//{sub("refs/heads/","",$2); print p "\t" $2}')
 }
 
+# ---- verb: cd (worktree の workspace へ移動) ----
+cmd_cd() {
+  local cwd repo_root; cwd="$(resolve_cwd)"
+  if ! repo_root="$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null)"; then
+    echo "エラー: $cwd は git リポジトリではありません" >&2; return 1
+  fi
+  local wt_list rows sel ws_id n
+  wt_list="$(herdr worktree list --cwd "$repo_root" --json 2>/dev/null | grep -m1 '^{')"
+  rows="$(git -C "$repo_root" worktree list --porcelain \
+    | awk '/^worktree /{p=$2} /^branch refs\/heads\/hwt\//{sub("refs/heads/","",$2); print p "\t" $2}' \
+    | while IFS=$'\t' read -r p b; do
+        wid="$(printf '%s' "$wt_list" | jq -r --arg p "$p" '.result.worktrees[]? | select(.path==$p) | .open_workspace_id // empty')"
+        [ -n "$wid" ] && printf '%s\t%s\n' "$wid" "$b"
+      done)"
+  if [ -z "$rows" ]; then echo "移動できる hwt worktree の workspace がありません"; return 0; fi
+  if command -v fzf >/dev/null 2>&1; then
+    sel="$(printf '%s\n' "$rows" | fzf --delimiter='\t' --with-nth=2)"
+  else
+    printf '%s\n' "$rows" | awk -F'\t' '{printf "  %d) %s\n", NR, $2}'
+    printf "> "; read -r n
+    sel="$(printf '%s\n' "$rows" | sed -n "${n}p")"
+  fi
+  ws_id="$(printf '%s' "$sel" | cut -f1)"
+  [ -n "$ws_id" ] && herdr workspace focus "$ws_id"
+}
+
 # ---- verb ディスパッチ ----
 [ $# -eq 0 ] && { usage; exit 0; }
 verb="$1"; shift
@@ -274,6 +300,7 @@ case "$verb" in
   clean)     cmd_clean "$@" ;;
   rm)        cmd_rm "$@" ;;
   ls)        cmd_ls "$@" ;;
+  cd)        cmd_cd "$@" ;;
   -h|--help) usage ;;
   *)         echo "hwt: 不明なコマンド '$verb'" >&2; usage >&2; exit 1 ;;
 esac
