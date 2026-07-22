@@ -209,6 +209,13 @@ STAMP="$(date +%m%d-%H%M%S)"
 SLUG="$(slugify "$PROMPT")"
 [ -z "$SLUG" ] && SLUG="dispatch"
 
+# herdr 0.7.5 の agent 名は [a-z][a-z0-9_-]{0,31} (先頭は小文字・小文字/数字/-/_ のみ・最大32文字)。
+# ブランチ名は大文字を許容するため SLUG をそのまま使い、agent 名だけ別途正規化する。
+# stamp(11) + 区切り + 並列インデックス分を確保するため slug は小文字化して 18 文字に詰める。
+AGENT_SLUG="$(printf '%s' "$SLUG" | tr 'A-Z' 'a-z' | tr -cs 'a-z0-9' '-' | sed 's/^-*//; s/-*$//' | cut -c1-18 | sed 's/-*$//')"
+case "$AGENT_SLUG" in [a-z]*) ;; *) AGENT_SLUG="d${AGENT_SLUG}" ;; esac
+[ -z "$AGENT_SLUG" ] && AGENT_SLUG="dispatch"
+
 # ---- 完了ウォッチャ(バックグラウンド・ポーリング) ----
 # herdr 0.7.4 は wait agent-status が未実装のため agent get をポーリングする。
 # idle/blocked = エージェントが手を止めた(完了 or 入力待ち) → 通知
@@ -239,10 +246,10 @@ watch_agent() {
 launched=()
 for i in $(seq 1 "$COUNT"); do
   if [ "$COUNT" -gt 1 ]; then
-    NAME="${SLUG}-${STAMP}-${i}"
+    NAME="${AGENT_SLUG}-${STAMP}-${i}"
     BRANCH="dispatch/${STAMP}-${SLUG}-${i}"
   else
-    NAME="${SLUG}-${STAMP}"
+    NAME="${AGENT_SLUG}-${STAMP}"
     BRANCH="dispatch/${STAMP}-${SLUG}"
   fi
 
