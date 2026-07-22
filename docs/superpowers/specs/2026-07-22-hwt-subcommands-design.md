@@ -64,9 +64,10 @@ herdr-toolkit/
 CLI 主・キーバインド薄く（アプローチ A）。実体は 1 スクリプト `hwt.sh` を共有し、
 CLI・plugin action の両方から呼ばれる。
 
-| コマンド | plugin action id | type | keybinding | 説明 |
+| CLI コマンド | plugin action id | type | keybinding | 説明 |
 | --- | --- | --- | --- | --- |
-| `hwt new [-a] [-n N] [テキスト]` | `new` | plugin_action | `prefix+d` | 現 repo から worktree+workspace 作成。`-a` で中に agent(既定 claude)起動。既定は起動しない |
+| `hwt new [-n N] [テキスト]` | `new` | plugin_action | `prefix+d` | worktree+workspace 作成（agent なし・軽い隔離） |
+| `hwt new -a [-n N] [テキスト]` | `new-agent` | plugin_action | `prefix+shift+d` | worktree+workspace 作成 **＋ agent 起動**（旧 `prefix+shift+d` と同等） |
 | `hwt ls` | `ls` | popup | （既定なし） | 現 repo の `hwt/*` worktree を状態付きで一覧 |
 | `hwt cd` | `cd` | popup | （既定なし） | worktree の workspace を選んでフォーカス移動 |
 | `hwt clean` | `clean` | plugin_action | `prefix+shift+c` | `hwt/*` を安全一括掃除（変更ありは保護） |
@@ -77,20 +78,39 @@ CLI・plugin action の両方から呼ばれる。
 - 名前は **`hwt`**（= herdr worktree。中身を正確に表す。この環境で衝突なしを確認済み）。
 - ブランチ接頭辞は `dispatch/*` → **`hwt/*`**。worktree パスは herdr の
   `[worktrees].directory`（既定 `~/.herdr/worktrees`）配下。
-- keybinding は同じキーを流用。**空いた `prefix+d`（旧 local）を `hwt new` に再割当**。
-  `prefix+shift+d`（旧 worktree 直行）は解放（将来用）。
 - `cd` は「その worktree の workspace へ移動」の意味（shell の cd ではなく
   `herdr workspace focus`）。`switch` でも可だが `cd` を採用。
-- `ls`/`cd`/`rm` は TTY/対話が要るため popup タイプ。`new`/`clean` は非対話で
-  plugin_action。
+- `ls`/`cd`/`rm` は TTY/対話が要るため popup タイプ。`new`/`new-agent`/`clean` は
+  非対話で plugin_action。
+
+### ショートカット（キーバインド）— 操作感の保存
+
+旧 `prefix+shift+d`（worktree 作成＋claude 起動、いちばんよく使う）の**操作感をキーごと保存**する。
+local 廃止で空く `prefix+d` は「agent なしの軽い worktree」に割り当て、両キーを活かす。
+
+| キー | plugin action | 挙動 | 旧との対応 |
+| --- | --- | --- | --- |
+| `prefix+shift+d` | `new-agent`（`hwt new -a`） | 新規 worktree＋workspace を作り focus 移動し、中で agent を起動 | **旧 `prefix+shift+d` と同一の操作感** |
+| `prefix+d` | `new`（`hwt new`） | 新規 worktree＋workspace を作り focus 移動（agent は起動しない） | 旧 local 枠を worktree-only に再利用 |
+| `prefix+shift+c` | `clean` | 安全一括掃除 | 旧と同じ |
+| `prefix+shift+x` | `rm` | 今いる worktree を確認破棄 | 旧 `--discard` と同じ |
+| （既定なし） | `ls` / `cd` | 一覧 / 移動 | CLI・herdr サイドバー運用（必要なら後で付与） |
+
+- **キーとCLIの非対称は意図的**: キー（`prefix+shift+d`）は旧来どおり agent まで起動する
+  フルフロー、CLI の `hwt new` は既定 agent なし・`-a` で明示、という住み分け。
+- キーバインドは `config/config.toml` の `[[keys.command]]` で `plugin_action` として定義する
+  （実装は `hwt.sh`、キーは herdr が非対話で action を呼ぶ）。
 
 ### 各 verb の挙動
 
 - **new**: 現 repo の HEAD から `hwt/<YYYYMMDD-HHMMSS>[-<slug>]` ブランチを切り、
-  `herdr worktree create` で worktree+workspace を作成しフォーカス移動。`-a` なしなら
-  worktree を作るだけ。`-a` 指定時のみ `herdr agent start` で agent（`HWT_AGENT`、
-  既定 `claude`）を起動し、完了監視（watcher）を張る。agent 名は herdr の命名規約
-  `[a-z][a-z0-9_-]{0,31}` に正規化。
+  `herdr worktree create --focus` で worktree を作成。**workspace の扱いは現行を維持**する:
+  worktree が **新しい workspace** として開き、**親リポジトリの workspace にグループ化**され、
+  **フォーカスがその新 workspace に移る**（＝「押したら隔離された新しい場所に飛ぶ」旧操作感）。
+  `-a` なしなら worktree を作るだけ。`-a` 指定時のみ `herdr agent start` で agent
+  （`HWT_AGENT`、既定 `claude`）を起動し、完了監視（watcher）を張る。agent 名は herdr の
+  命名規約 `[a-z][a-z0-9_-]{0,31}` に正規化。
+  - 並列（`-n>=2`）時は各 workspace を作るが focus は元に留める（現行踏襲）。
   - 位置引数 `[テキスト]` は常にブランチ slug 化に使う。**`-a` 併用時は同じテキストを
     agent への初期プロンプトとしても渡す**（旧 dispatch の「prompt 付き起動」を踏襲）。
     `-a` なしでテキストのみ指定した場合はブランチ名のヒントになるだけ。
@@ -121,10 +141,11 @@ CLI・plugin action の両方から呼ばれる。
 ## 旧 dispatch からの移行（ハードカット）
 
 - `plugins/dispatch/` → **`plugins/hwt/`**（`git mv`）。`dispatch.sh` → `hwt.sh`。
-- `herdr-plugin.toml`: `id = s-hiraoku.hwt`、action id を `new`/`ls`/`cd`/`clean`/`rm` に。
-  version は 1.0.0 にリセット（改称＝新規扱い）。
-- `config/config.toml`: dispatch のキーバインドブロックを hwt の action id へ向け直し
-  （キーは流用、`prefix+d`→`new`）。旧 `dispatch.dispatch`/`--discard` 参照は削除。
+- `herdr-plugin.toml`: `id = s-hiraoku.hwt`、action id を `new`/`new-agent`/`ls`/`cd`/`clean`/`rm`
+  に（`new-agent` は `bash hwt.sh new -a`）。version は 1.0.0 にリセット（改称＝新規扱い）。
+- `config/config.toml`: dispatch のキーバインドブロックを hwt の action id へ向け直し。
+  キーは流用し、`prefix+shift+d`→`new-agent`（旧操作感保存）、`prefix+d`→`new`、
+  `prefix+shift+c`→`clean`、`prefix+shift+x`→`rm`。旧 `dispatch.dispatch`/`--discard` 参照は削除。
 - 旧 CLI フラグ（`-w/-l/--clean/--discard/--no-prompt` の旧セマンティクス）は廃止。
   `hwt` は verb 構文のみ受け付け、未知トークンは usage でエラー。
 - README（トップ + `plugins/hwt/README.md`）を hwt の verb 表記に全面更新。
