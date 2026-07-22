@@ -18,8 +18,8 @@ herdr plugin link ~/ghq/github.com/s-hiraoku/herdr-toolkit/plugins/hwt
 
 | CLI | plugin action | keybinding | 説明 |
 | --- | --- | --- | --- |
-| `hwt new [-n N] [テキスト]` | `new` | `prefix+d` | 新規 worktree+workspace(agent なし) |
-| `hwt new -a [-n N] [テキスト]` | `new-agent` | `prefix+shift+d` | 新規 worktree+workspace + agent 起動 |
+| `hwt new [-n N] [テキスト]` | `new` | `prefix+f` | 新規 worktree+workspace(agent なし) |
+| `hwt new -a [-n N] [テキスト]` | `new-agent` | `prefix+shift+f` | 新規 worktree+workspace + agent 起動 |
 | `hwt ls` | `ls` | （なし） | 現 repo の `hwt/*` worktree を状態付き一覧 |
 | `hwt cd` | `cd` | （なし） | worktree の workspace を選んで移動 |
 | `hwt clean` | `clean` | `prefix+shift+c` | `hwt/*` の残骸を安全掃除(変更ありは保護) |

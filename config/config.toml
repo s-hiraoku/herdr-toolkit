@@ -105,21 +105,22 @@ mouse_capture = true
 # hwt プラグイン (herdr-toolkit) — herdr worktree ラッパー
 # プラグイン本体: https://github.com/s-hiraoku/herdr-toolkit (plugins/hwt)
 # ─────────────────────────────────────────────
-# prefix+shift+d は「新規 worktree + agent 起動」で旧操作感を保存。prefix+d は
-# 「agent なしの軽い worktree」。ls/cd は既定キーなし(CLI 運用)。
+# キーは f = "fork"(worktree で作業を分岐)のニーモニック。prefix+f / prefix+shift+f は
+# herdr 既定・他の config キーとも衝突しない完全な空き。prefix+shift+f=worktree+agent、
+# prefix+f=worktree のみ。ls/cd は既定キーなし(CLI 運用)。
 agent_panel_sort = "priority"
 
 [[keys.command]]
-key = "prefix+shift+d"
+key = "prefix+shift+f"
 type = "plugin_action"
 command = "s-hiraoku.hwt.new-agent"
-description = "hwt: 新規 worktree + agent 起動(旧 prefix+shift+d 同等)"
+description = "hwt: fork = 新規 worktree + agent 起動"
 
 [[keys.command]]
-key = "prefix+d"
+key = "prefix+f"
 type = "plugin_action"
 command = "s-hiraoku.hwt.new"
-description = "hwt: 新規 worktree(agent なし)"
+description = "hwt: fork = 新規 worktree(agent なし)"
 
 [[keys.command]]
 key = "prefix+shift+c"
