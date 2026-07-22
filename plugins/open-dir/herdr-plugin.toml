@@ -1,0 +1,11 @@
+id = "s-hiraoku.open-dir"
+name = "open-dir"
+version = "1.0.0"
+min_herdr_version = "0.7.5"
+description = "Pick a directory (zoxide/ghq/scan, fzf-optional, zero required deps) and open it as a new herdr workspace — fills the native gap of choosing an arbitrary cwd from a keybinding."
+platforms = ["linux", "macos"]
+
+[[actions]]
+id = "pick"
+title = "Open a chosen directory as a new workspace"
+command = ["bash", "open-dir.sh"]

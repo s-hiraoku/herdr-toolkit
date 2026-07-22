@@ -11,13 +11,15 @@ plugins/<name>/           # 1 プラグイン = 1 自己完結ディレクトリ
 scripts/setup.sh          # plugins/* を herdr に link し CLI を PATH に通す
 ```
 
-各プラグインの詳細は、それぞれのディレクトリの README を参照:
+各プラグインの詳細はそれぞれの README を参照:
 
-- **[hwt](plugins/hwt/README.md)** — git worktree を短いコマンドで扱う herdr ラッパー
-  (`hwt new/ls/cd/clean/rm`。`new -a` で worktree 内に AI エージェントも起動)
+- **[open-dir](plugins/open-dir/README.md)** — ディレクトリを選んで任意フォルダ起点の workspace を作る
+  （herdr ネイティブに無い「キーから任意 cwd 選択」の穴埋め。依存ゼロ・fzf/zoxide/ghq は任意加速）
 
-新しいツールを足すときは `plugins/<name>/`（`herdr-plugin.toml` ＋ CLI を出すなら `<name>.sh`
-＋ `README.md`）を作り、`scripts/setup.sh` を再実行するだけ。
+プラグインの追加規約は [plugins/README.md](plugins/README.md)。新しいツールは `plugins/<name>/`
+（`herdr-plugin.toml` ＋ CLI を出すなら `<name>.sh` ＋ `README.md`）を作り `scripts/setup.sh` を
+再実行するだけ。ラッパーを作る前に、まず herdr ネイティブ（CLI / `keys.*` / config ポリシー）で
+済まないかを確認する。
 
 ## config.toml の管理方法
 
