@@ -209,12 +209,47 @@ cmd_clean() {
   notify "hwt clean: 削除 ${removed} / 保護 ${kept}${kept_list:+ ($kept_list)}" done
 }
 
+# ---- verb: rm (今いる worktree を確認破棄) ----
+cmd_rm() {
+  local cwd br wt_root; cwd="$(resolve_cwd)"
+  br="$(git -C "$cwd" branch --show-current 2>/dev/null || true)"
+  wt_root="$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null || true)"
+  case "$br" in
+    hwt/*) ;;
+    *)
+      echo "ここは hwt worktree ではありません (branch: ${br:-なし})"
+      echo "誤爆防止のため、hwt/* ブランチの worktree でのみ使えます。"
+      echo "Enter で閉じる..."; read -r _; return 1 ;;
+  esac
+  local main_git_dir main_root dirty_count unique ans ws_id
+  main_git_dir="$(git -C "$wt_root" rev-parse --git-common-dir)"
+  main_root="$(dirname "$main_git_dir")"
+  echo "破棄対象: $wt_root"; echo "ブランチ: $br"
+  dirty_count="$(git -C "$wt_root" status --porcelain | wc -l | tr -d ' ')"
+  unique="$(git -C "$main_root" rev-list --count "$br" --not --exclude="$br" --branches --remotes 2>/dev/null || echo '?')"
+  echo "未コミットの変更: ${dirty_count} ファイル / 独自コミット: ${unique} 件"
+  if [ "$dirty_count" != "0" ]; then
+    echo "--- 変更ファイル ---"; git -C "$wt_root" status --porcelain | head -10
+  fi
+  echo ""; printf "この worktree・ブランチ・workspace を完全に破棄しますか? [y/N] "
+  read -r ans
+  case "$ans" in y|Y|yes) ;; *) echo "中止しました"; return 0 ;; esac
+  ws_id="$(herdr worktree list --cwd "$main_root" --json 2>/dev/null | grep -m1 '^{' \
+    | jq -r --arg p "$wt_root" '.result.worktrees[]? | select(.path == $p) | .open_workspace_id // empty')"
+  [ -n "$ws_id" ] && herdr worktree remove --workspace "$ws_id" --force >/dev/null 2>&1 || true
+  git -C "$main_root" worktree remove --force "$wt_root" >/dev/null 2>&1 || true
+  git -C "$main_root" worktree prune >/dev/null 2>&1 || true
+  git -C "$main_root" branch -D "$br" >/dev/null 2>&1 || true
+  notify "hwt: $br を破棄しました" done
+}
+
 # ---- verb ディスパッチ ----
 [ $# -eq 0 ] && { usage; exit 0; }
 verb="$1"; shift
 case "$verb" in
   new)       cmd_new "$@" ;;
   clean)     cmd_clean "$@" ;;
+  rm)        cmd_rm "$@" ;;
   -h|--help) usage ;;
   *)         echo "hwt: 不明なコマンド '$verb'" >&2; usage >&2; exit 1 ;;
 esac
