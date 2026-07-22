@@ -107,11 +107,14 @@ mouse_capture = true
 # エージェントをローカル split / 新規 worktree workspace に送り出す。
 # プラグイン本体: https://github.com/s-hiraoku/herdr-toolkit (plugins/dispatch)
 agent_panel_sort = "priority"
+# prefix+d は local split 直行。対話選択モード(dispatch.dispatch)は選択プロンプトに
+# TTY が要り plugin_action(非対話)では動かないため、キーには local を割り当てる。
+# local/worktree を選ぶ対話版は CLI(dispatch.sh 引数なし)から使う。
 [[keys.command]]
 key = "prefix+d"
 type = "plugin_action"
-command = "s-hiraoku.dispatch.dispatch"
-description = "dispatch: local/worktree を選んでエージェント起動"
+command = "s-hiraoku.dispatch.dispatch-local"
+description = "dispatch: 今のリポジトリで local split 起動"
 
 [[keys.command]]
 key = "prefix+shift+d"

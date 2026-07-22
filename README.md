@@ -46,7 +46,7 @@ herdr plugin install s-hiraoku/herdr-toolkit/plugins/dispatch
 
 | キー | 動作 |
 | --- | --- |
-| `prefix+d` | dispatch(local / worktree を対話選択して起動) |
+| `prefix+d` | 今のリポジトリで local split 起動 |
 | `prefix+shift+d` | worktree に直行(いちばんよく使う) |
 | `prefix+shift+c` | dispatch worktree の残骸を掃除(変更ありは保護) |
 | `prefix+shift+x` | **今いる** dispatch worktree を確認つきで破棄(popup) |
