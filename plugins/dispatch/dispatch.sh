@@ -294,8 +294,9 @@ for i in $(seq 1 "$COUNT"); do
   START_ARGS=("$NAME" --kind "$AGENT_CMD" --pane "$PANE_ID")
   [ -n "$PROMPT" ] && START_ARGS+=(-- "$PROMPT")
   started=0
+  start_err=""
   for _try in $(seq 1 30); do
-    if herdr agent start "${START_ARGS[@]}" >/dev/null 2>&1; then
+    if start_err="$(herdr agent start "${START_ARGS[@]}" 2>&1 >/dev/null)"; then
       started=1
       break
     fi
@@ -303,7 +304,7 @@ for i in $(seq 1 "$COUNT"); do
   done
   if [ "$started" -ne 1 ]; then
     notify "dispatch: $NAME の起動に失敗しました (pane $PANE_ID)" request
-    echo "エラー: agent start が失敗しました: $(herdr agent start "${START_ARGS[@]}" 2>&1 | tail -1)" >&2
+    echo "エラー: agent start が失敗しました: $(printf '%s' "$start_err" | tail -1)" >&2
     exit 1
   fi
 
