@@ -27,8 +27,8 @@ herdr plugin link ~/ghq/github.com/s-hiraoku/herdr-toolkit/plugins/hwt
 
 `hwt new` / `new -a` は worktree を**新しい workspace** として開き、親 repo の workspace に
 グループ化し、フォーカスを移す（「押したら隔離された新しい場所に飛ぶ」操作感）。`-a` 時は
-位置引数を agent の初期プロンプトにも使う。`-n <2..8>` で worktree を複数本作り、`-a` と
-併用すると同一プロンプトで並列起動でき案の比較に使える。
+位置引数を agent の初期プロンプトにも使う。`-n <1..8>` で worktree の本数を指定でき
+(2 以上で複数本)、`-a` と併用すると同一プロンプトで並列起動でき案の比較に使える。
 
 `ls`/`cd`/`rm` は対話・TTY を伴うため CLI（またはキーの popup）から使う。
 

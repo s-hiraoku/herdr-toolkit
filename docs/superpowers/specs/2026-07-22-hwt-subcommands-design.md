@@ -38,7 +38,7 @@
 
 「プラグインを足すときは `plugins/<name>/` を作るだけ」を規約にする。
 
-```
+```text
 herdr-toolkit/
 ├── README.md                    # toolkit 概要 + 各プラグインへのリンク
 ├── config/config.toml           # 全プラグイン共通の設定・キーバインド（nix が symlink）
