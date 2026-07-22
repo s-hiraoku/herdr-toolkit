@@ -26,8 +26,14 @@
 #     プロセス終了で agent 自体が消える(agent_not_found)
 set -eu
 
-# plugin action は最小 PATH で実行され herdr/jq (Homebrew) が見つからないため補完する
-export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+# plugin action は最小 PATH で実行され herdr/jq が見つからないため補完する。
+# herdr 本体の場所は herdr 自身が渡す HERDR_BIN_PATH で解決する(Linux/macOS 両対応・
+# Homebrew パス決め打ちを避ける)。jq/git 等の補助ツール用に一般的な bin を後方に足す。
+if [ -n "${HERDR_BIN_PATH:-}" ]; then
+  PATH="$(dirname "$HERDR_BIN_PATH"):$PATH"
+fi
+PATH="$PATH:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+export PATH
 
 MODE=""
 COUNT=1
@@ -220,8 +226,52 @@ case "$AGENT_SLUG" in [a-z]*) ;; *) AGENT_SLUG="d${AGENT_SLUG}" ;; esac
 # herdr 0.7.4 は wait agent-status が未実装のため agent get をポーリングする。
 # idle/blocked = エージェントが手を止めた(完了 or 入力待ち) → 通知
 # agent_not_found = プロセス終了で pane が閉じた → 通知
+#
+# 監視プロセスが無制限に溜まらないよう pidfile で登録し、起動のたびに死んだものを
+# 掃除して同時数に上限を設ける。状態は herdr が渡す HERDR_PLUGIN_STATE_DIR に置く
+# (CLI 直接実行時は TMPDIR にフォールバック)。
+WATCH_DIR="${HERDR_PLUGIN_STATE_DIR:-${TMPDIR:-/tmp}/herdr-dispatch}/watchers"
+MAX_WATCHERS="${DISPATCH_MAX_WATCHERS:-16}"
+# 非数値が渡ると -ge がエラーになり cap が無効化されるため既定値に正規化する
+case "$MAX_WATCHERS" in
+  ''|*[!0-9]*) MAX_WATCHERS=16 ;;
+esac
+
+prune_dead_watchers() {
+  [ -d "$WATCH_DIR" ] || return 0
+  local pf pid
+  for pf in "$WATCH_DIR"/*.pid; do
+    [ -e "$pf" ] || continue
+    pid="$(cat "$pf" 2>/dev/null || true)"
+    if [ -z "$pid" ] || ! kill -0 "$pid" 2>/dev/null; then
+      rm -f "$pf"
+    fi
+  done
+}
+
+live_watcher_count() {
+  # find の -maxdepth に依存せず glob で数える(全プラットフォームで確実)。
+  # マッチ 0 件のときは '*.pid' が literal のまま来るので [ -e ] で弾く。
+  local n=0 pf
+  for pf in "$WATCH_DIR"/*.pid; do
+    [ -e "$pf" ] && n=$((n + 1))
+  done
+  echo "$n"
+}
+
 watch_agent() {
   local target="$1"
+  # 状態ディレクトリを作れないときは未追跡 watcher を残さないよう監視をスキップ
+  # (エージェント自体は起動済み。通知だけ諦める)。
+  if ! mkdir -p "$WATCH_DIR" 2>/dev/null; then
+    echo "⚠️ watcher 状態ディレクトリを作成できず $target の完了通知はスキップします ($WATCH_DIR)" >&2
+    return 0
+  fi
+  prune_dead_watchers
+  if [ "$(live_watcher_count)" -ge "$MAX_WATCHERS" ]; then
+    echo "⚠️ 完了監視が上限(${MAX_WATCHERS}件)に達したため $target の通知はスキップします" >&2
+    return 0
+  fi
   (
     local deadline=$(( $(date +%s) + 7200 ))  # 最長2時間
     sleep 30  # 起動直後の unknown/idle を拾わないよう助走を置く
@@ -240,6 +290,14 @@ watch_agent() {
     done
     notify "dispatch: $target の監視が2時間でタイムアウトしました" request
   ) >/dev/null 2>&1 &
+  # バックグラウンド watcher の PID を親側で記録する。$BASHPID は macOS 同梱の
+  # bash 3.2 に無く set -u で落ちるため使わない。終了済み watcher の pidfile は
+  # 次回起動時に prune_dead_watchers が掃除する。
+  local wpid=$!
+  # pidfile を書けなければ未追跡 watcher になってしまうので、その watcher は止める
+  if ! echo "$wpid" > "$WATCH_DIR/watch-${wpid}.pid" 2>/dev/null; then
+    kill "$wpid" 2>/dev/null || true
+  fi
 }
 
 # ---- 起動 ----
