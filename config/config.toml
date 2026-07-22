@@ -105,6 +105,17 @@ mouse_capture = true
 agent_panel_sort = "priority"
 
 # ─────────────────────────────────────────────
+# open-dir プラグイン (herdr-toolkit/plugins/open-dir)
+# ディレクトリを選んで任意フォルダ起点の workspace を作る(native の穴埋め)。
+# 対話 picker のため plugin_action ではなく popup で呼ぶ。
+# ─────────────────────────────────────────────
+[[keys.command]]
+key = "prefix+shift+o"
+type = "popup"
+command = '''bash "$HOME/ghq/github.com/s-hiraoku/herdr-toolkit/plugins/open-dir/open-dir.sh"'''
+description = "open-dir: ディレクトリを選んで workspace 作成"
+
+# ─────────────────────────────────────────────
 # サイドバー表示 (herdr 0.7.4 で行レイアウトが変わり見にくくなった対策)
 # ─────────────────────────────────────────────
 # 0.7.4 から展開サイドバーが packed(行間0)になった。旧仕様の行間に戻す

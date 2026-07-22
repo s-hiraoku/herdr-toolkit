@@ -11,12 +11,15 @@ plugins/<name>/           # 1 プラグイン = 1 自己完結ディレクトリ
 scripts/setup.sh          # plugins/* を herdr に link し CLI を PATH に通す
 ```
 
-プラグインの追加規約・詳細は [plugins/README.md](plugins/README.md) を参照。
-新しいツールを足すときは `plugins/<name>/`（`herdr-plugin.toml` ＋ CLI を出すなら `<name>.sh`
-＋ `README.md`）を作り、`scripts/setup.sh` を再実行するだけ。
+各プラグインの詳細はそれぞれの README を参照:
 
-（現在プラグインは無し。worktree/workspace 作成など基本操作は herdr ネイティブで足りるため、
-ラッパーを作る前に `herdr` の CLI / `keys.*` / config ポリシーで済まないかを先に確認する。）
+- **[open-dir](plugins/open-dir/README.md)** — ディレクトリを選んで任意フォルダ起点の workspace を作る
+  （herdr ネイティブに無い「キーから任意 cwd 選択」の穴埋め。依存ゼロ・fzf/zoxide/ghq は任意加速）
+
+プラグインの追加規約は [plugins/README.md](plugins/README.md)。新しいツールは `plugins/<name>/`
+（`herdr-plugin.toml` ＋ CLI を出すなら `<name>.sh` ＋ `README.md`）を作り `scripts/setup.sh` を
+再実行するだけ。ラッパーを作る前に、まず herdr ネイティブ（CLI / `keys.*` / config ポリシー）で
+済まないかを確認する。
 
 ## config.toml の管理方法
 
