@@ -102,31 +102,31 @@ mouse_capture = true
 # - タブ / ペインの採番仕様: Herdr の表示で確認。
 
 # ─────────────────────────────────────────────
-# dispatch プラグイン (herdr-toolkit)
+# hwt プラグイン (herdr-toolkit) — herdr worktree ラッパー
+# プラグイン本体: https://github.com/s-hiraoku/herdr-toolkit (plugins/hwt)
 # ─────────────────────────────────────────────
-# エージェントをローカル split / 新規 worktree workspace に送り出す。
-# プラグイン本体: https://github.com/s-hiraoku/herdr-toolkit (plugins/dispatch)
+# キーは f = "fork"(worktree で作業を分岐)のニーモニック。prefix+f / prefix+shift+f は
+# herdr 既定・他の config キーとも衝突しない完全な空き。prefix+shift+f=worktree+agent、
+# prefix+f=worktree のみ。ls/cd は既定キーなし(CLI 運用)。
 agent_panel_sort = "priority"
-# prefix+d は local split 直行。対話選択モード(dispatch.dispatch)は選択プロンプトに
-# TTY が要り plugin_action(非対話)では動かないため、キーには local を割り当てる。
-# local/worktree を選ぶ対話版は CLI(dispatch.sh 引数なし)から使う。
-[[keys.command]]
-key = "prefix+d"
-type = "plugin_action"
-command = "s-hiraoku.dispatch.dispatch-local"
-description = "dispatch: 今のリポジトリで local split 起動"
 
 [[keys.command]]
-key = "prefix+shift+d"
+key = "prefix+shift+f"
 type = "plugin_action"
-command = "s-hiraoku.dispatch.dispatch-worktree"
-description = "dispatch: 新規 worktree でエージェント起動"
+command = "s-hiraoku.hwt.new-agent"
+description = "hwt: fork = 新規 worktree + agent 起動"
+
+[[keys.command]]
+key = "prefix+f"
+type = "plugin_action"
+command = "s-hiraoku.hwt.new"
+description = "hwt: fork = 新規 worktree(agent なし)"
 
 [[keys.command]]
 key = "prefix+shift+c"
 type = "plugin_action"
-command = "s-hiraoku.dispatch.dispatch-clean"
-description = "dispatch: 使い捨てworktreeの残骸を掃除(変更ありは保護)"
+command = "s-hiraoku.hwt.clean"
+description = "hwt: hwt/* の残骸を安全掃除(変更ありは保護)"
 
 # ─────────────────────────────────────────────
 # サイドバー表示 (herdr 0.7.4 で行レイアウトが変わり見にくくなった対策)
@@ -145,10 +145,10 @@ subtext0 = "#bac2de"
 overlay0 = "#9399b2"
 overlay1 = "#a6adc8"
 
-# 今いる dispatch worktree を確認つきで破棄(変更が残っていても y で削除)。
+# 今いる hwt worktree を確認つきで破棄(変更が残っていても y で削除)。
 # 対話確認が必要なため plugin_action ではなく popup(フローティングターミナル)で実行
 [[keys.command]]
 key = "prefix+shift+x"
 type = "popup"
-command = '''bash "$HOME/ghq/github.com/s-hiraoku/herdr-toolkit/plugins/dispatch/dispatch.sh" --discard'''
-description = "dispatch: 今のworktreeを破棄(確認あり)"
+command = '''bash "$HOME/ghq/github.com/s-hiraoku/herdr-toolkit/plugins/hwt/hwt.sh" rm'''
+description = "hwt: 今の worktree を破棄(確認あり)"
