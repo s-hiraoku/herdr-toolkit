@@ -11,6 +11,8 @@
 1. `[[events]]` で `pane.agent_status_changed` を購読 → `on-event.sh` が走る。
 2. status が対象（既定 `blocked`）なら、対象ペインを state に記録し、
    `herdr plugin pane open` で popup（`[[panes]]` の `prompt`）を開く。
+   ただし対象ペインが**既に見えている**（フォーカス中 workspace の表示中タブに属する）
+   場合は、ジャンプする意味がないので popup を出さない。
 3. popup の `prompt.sh` が「ジャンプする? [Enter=移動 / n=閉じる]」を尋ね、
    Enter なら `herdr workspace focus` ＋ `herdr agent focus` で移動する。
 
@@ -41,6 +43,9 @@ status 値は `idle` / `working` / `blocked` / `done` / `unknown`。既定を `b
 
 ## 設計メモ
 
+- 「既に見えているか」は `herdr agent list` で対象 pane の `tab_id` を引き、
+  `herdr workspace list` で「その workspace が `focused` かつ `active_tab_id` が一致」で判定。
+  判定に失敗した場合は従来どおり popup を出す（安全側）。
 - 多重 popup を防ぐため atomic lock（`mkdir` ロック）を使い、prompt が開いている間は
   新しい popup を出さない（最新の対象で 1 つだけ）。
 - popup とイベントハンドラは別プロセスなので、対象ペインは state ファイル

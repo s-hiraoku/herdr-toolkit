@@ -35,6 +35,17 @@ done
 # workspace_id が空なら pane_id の ':' 前から導出
 [ -z "$ws" ] && ws="${pane%%:*}"
 
+# 対象ペインが既に見えている(=フォーカス中 workspace の表示中タブ)なら popup 不要。
+# 判定に失敗した場合は従来どおり popup を出す(安全側)。
+tab="$(herdr agent list 2>/dev/null \
+  | jq -r --arg p "$pane" '.result.agents[]? | select(.pane_id == $p) | .tab_id // empty' 2>/dev/null || true)"
+if [ -n "$tab" ]; then
+  visible="$(herdr workspace list 2>/dev/null \
+    | jq -r --arg ws "$ws" --arg tab "$tab" \
+      '.result.workspaces[]? | select(.workspace_id == $ws and .focused == true and .active_tab_id == $tab) | "1"' 2>/dev/null || true)"
+  [ "$visible" = "1" ] && exit 0
+fi
+
 # 多重 popup 防止(atomic lock)。既に prompt が開いていれば何もしない。
 if mkdir "$STATE_DIR/prompt.lock" 2>/dev/null; then
   printf '%s\t%s\t%s\n' "$status" "$ws" "$pane" > "$STATE_DIR/target"
